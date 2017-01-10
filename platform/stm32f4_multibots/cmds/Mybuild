@@ -109,3 +109,12 @@ module i2c_slave {
 	depends third_party.bsp.stmf4cube.stm32f4_discovery_bsp
 	depends embox.driver.i2c.stm32f4.i2c
 }
+
+@AutoCmd
+@Cmd(name="ir_test", help="IR test")
+@BuildDepends(third_party.bsp.stmf4cube.core)
+module ir_test {
+	source "ir_test.c"
+
+	depends third_party.bsp.stmf4cube.stm32f4_discovery
+}
