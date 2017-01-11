@@ -119,11 +119,20 @@ module ir_test {
 	depends third_party.bsp.stmf4cube.stm32f4_discovery
 }
 
-@AutoCmd
-@Cmd(name="stepper_motor_test", help="Stepper motor test")
 @BuildDepends(third_party.bsp.stmf4cube.core)
-module stepper_motor_test {
-	source "stepper_motor_test.c"
+static module stepper_motor {
+	source "stepper_motor.c"
+
+	depends third_party.bsp.stmf4cube.stm32f4_discovery
+}
+
+@AutoCmd
+@Cmd(name="robot_test", help="Robot test")
+@BuildDepends(third_party.bsp.stmf4cube.core)
+module robot_test {
+	source "main.c"
+
+	depends stepper_motor
 
 	depends third_party.bsp.stmf4cube.stm32f4_discovery
 }
