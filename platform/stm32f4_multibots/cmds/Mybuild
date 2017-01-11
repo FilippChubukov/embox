@@ -118,3 +118,12 @@ module ir_test {
 
 	depends third_party.bsp.stmf4cube.stm32f4_discovery
 }
+
+@AutoCmd
+@Cmd(name="stepper_motor_test", help="Stepper motor test")
+@BuildDepends(third_party.bsp.stmf4cube.core)
+module stepper_motor_test {
+	source "stepper_motor_test.c"
+
+	depends third_party.bsp.stmf4cube.stm32f4_discovery
+}
