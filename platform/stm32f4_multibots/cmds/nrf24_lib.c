@@ -24,7 +24,7 @@ static void spi_delay(int n) {
 
 extern uint8_t spi_transfer(uint8_t tx);
 
-static void nrf24_test(void) {
+void nrf24_enable(void) {
 	uint8_t rx_address[5] = {0xA7,0x95,0xF1,0x36,0x07};
 	uint8_t tx_address[5] = {0xA7,0x95,0xF1,0x36,0x06};
 	//uint8_t tx_address[5] = {0x17,0x97,0xA7,0xA7,0xD7};
@@ -126,9 +126,6 @@ static void nrf24_test(void) {
 
 	nrf24_readRegister(FIFO_STATUS,&reg,1);
 	printf("!!!!!!> 3 FIFO_STATUS = %2X\n", reg);
-
-	while (1)
-		;
 }
 
 static irq_return_t exti0_handler(unsigned int irq_nr, void *data) {
@@ -169,31 +166,13 @@ static int EXTILine0_Config(void) {
 	printf(">>>6 EXTILine0_Config\n");
 
 	/* Enable GPIOA clock */
-	__HAL_RCC_GPIOA_CLK_ENABLE();
+	__HAL_RCC_GPIOB_CLK_ENABLE();
 
 	/* Configure PA0 pin as input floating */
 	GPIO_InitStructure.Mode = GPIO_MODE_IT_FALLING;
 	GPIO_InitStructure.Pull = GPIO_NOPULL;
 	GPIO_InitStructure.Pin  = GPIO_PIN_0;
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStructure);
+	HAL_GPIO_Init(GPIOB, &GPIO_InitStructure);
 
-	return irq_attach(EXTI0_IRQn + 16, exti0_handler, 0, NULL, "stm32 systick timer");
-}
-
-static void init_leds() {
-	BSP_LED_Init(LED3);
-	BSP_LED_Init(LED4);
-	BSP_LED_Init(LED5);
-	BSP_LED_Init(LED6);
-}
-
-int main(int argc, char *argv[]) {
-	printf("NRF24 recv (irq) test start\n");
-
-	init_leds();
-	BSP_LED_Toggle(LED5);
-
-	nrf24_test();
-
-	return 0;
+	return irq_attach(EXTI0_IRQn + 16, exti0_handler, 0, NULL, "NRF24");
 }
