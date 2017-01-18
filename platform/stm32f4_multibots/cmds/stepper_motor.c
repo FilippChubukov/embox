@@ -19,24 +19,32 @@ static void stm32_delay(uint32_t delay) {
 		;
 }
 
-void motor_init(struct stepper_motor *m) {
+
+void motor_init(struct stepper_motor *m, uint16_t in1, uint16_t in2,
+		uint16_t in3, uint16_t in4, GPIO_TypeDef  *GPIOx) {
 	GPIO_InitTypeDef  GPIO_InitStruct;
 
 	memset(&GPIO_InitStruct, 0, sizeof(GPIO_InitStruct));
 
-	MOTOR_CLK_ENABLE();
+	m->in1 = in1;
+	m->in2 = in2;
+	m->in3 = in3;
+	m->in4 = in4;
+	m->GPIOx = GPIOx;
+
+	//MOTOR_CLK_ENABLE();
 
 	GPIO_InitStruct.Mode      = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStruct.Pull      = GPIO_PULLUP;
 	GPIO_InitStruct.Speed     = GPIO_SPEED_FAST;
 	
-	GPIO_InitStruct.Pin = MOTOR_IN1 | MOTOR_IN2 | MOTOR_IN3 | MOTOR_IN4;
-	HAL_GPIO_Init(MOTOR_GPIO, &GPIO_InitStruct);
+	GPIO_InitStruct.Pin = m->in1 | m->in2 | m->in3 | m->in4;
+	HAL_GPIO_Init(m->GPIOx, &GPIO_InitStruct);
 	
-	HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN1, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN2, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN3, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN4, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(m->GPIOx, m->in1, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(m->GPIOx, m->in2, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(m->GPIOx, m->in3, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(m->GPIOx, m->in4, GPIO_PIN_RESET);
 
 	m->speed = MOTOR_DEFAULT_SPEED;
 	m->step_size = MOTOR_STEP_SIZE;
@@ -52,40 +60,40 @@ static void motor_do_one_step(struct stepper_motor *m, int direction) {
 
 	if (direction == MOTOR_RUN_FORWARD) {
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN1, GPIO_PIN_SET);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN2, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in1, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in2, GPIO_PIN_SET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN1, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in1, GPIO_PIN_RESET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN3, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in3, GPIO_PIN_SET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN2, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in2, GPIO_PIN_RESET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN4, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in4, GPIO_PIN_SET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN3, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in3, GPIO_PIN_RESET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN1, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in1, GPIO_PIN_SET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN4, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in4, GPIO_PIN_RESET);
 	} else {
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN1, GPIO_PIN_SET);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN4, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in1, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in4, GPIO_PIN_SET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN1, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in1, GPIO_PIN_RESET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN3, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in3, GPIO_PIN_SET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN4, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in4, GPIO_PIN_RESET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN2, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in2, GPIO_PIN_SET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN3, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in3, GPIO_PIN_RESET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN1, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in1, GPIO_PIN_SET);
 		stm32_delay(delay);
-		HAL_GPIO_WritePin(MOTOR_GPIO, MOTOR_IN2, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(m->GPIOx, m->in2, GPIO_PIN_RESET);
 	}
 }
 
