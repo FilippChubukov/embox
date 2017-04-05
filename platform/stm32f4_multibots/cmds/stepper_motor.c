@@ -14,11 +14,16 @@
 #include "stm32f4_discovery.h"
 #include "stepper_motor.h"
 
+#define DO_STEPS(gpio1, in1, gpio2, in2, state) \
+			do { \
+				HAL_GPIO_WritePin(gpio1, in1, state); \
+				HAL_GPIO_WritePin(gpio2, in2, state); \
+			} while(0)
+
 static void stm32_delay(uint32_t delay) {
 	while (--delay > 0)
 		;
 }
-
 
 void motor_init(struct stepper_motor *m, uint16_t in1, uint16_t in2,
 		uint16_t in3, uint16_t in4, GPIO_TypeDef  *GPIOx) {
@@ -51,6 +56,50 @@ void motor_init(struct stepper_motor *m, uint16_t in1, uint16_t in2,
 	m->steps_cnt = 0;
 
 	printf("Motor inited\n");
+}
+
+static void motor_do_one_step2(struct stepper_motor *m1, struct stepper_motor *m2, int direction) {
+	size_t delay = m1->speed * MOTOR_MIN_DELAY;
+
+	assert(direction == MOTOR_RUN_FORWARD || direction == MOTOR_RUN_BACKWARD);
+
+	if (direction == MOTOR_RUN_FORWARD) {
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in1, m2->GPIOx, m2->in1, GPIO_PIN_SET);
+		DO_STEPS(m1->GPIOx, m1->in2, m2->GPIOx, m2->in2, GPIO_PIN_SET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in1, m2->GPIOx, m2->in1, GPIO_PIN_RESET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in3, m2->GPIOx, m2->in3, GPIO_PIN_SET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in2, m2->GPIOx, m2->in2, GPIO_PIN_RESET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in4, m2->GPIOx, m2->in4, GPIO_PIN_SET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in3, m2->GPIOx, m2->in3, GPIO_PIN_RESET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in1, m2->GPIOx, m2->in1, GPIO_PIN_SET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in4, m2->GPIOx, m2->in4, GPIO_PIN_RESET);
+	} else {
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in1, m2->GPIOx, m2->in1, GPIO_PIN_SET);
+		DO_STEPS(m1->GPIOx, m1->in4, m2->GPIOx, m2->in4, GPIO_PIN_SET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in1, m2->GPIOx, m2->in1, GPIO_PIN_RESET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in3, m2->GPIOx, m2->in3, GPIO_PIN_SET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in4, m2->GPIOx, m2->in4, GPIO_PIN_RESET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in2, m2->GPIOx, m2->in2, GPIO_PIN_SET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in3, m2->GPIOx, m2->in3, GPIO_PIN_RESET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in1, m2->GPIOx, m2->in1, GPIO_PIN_SET);
+		stm32_delay(delay);
+		DO_STEPS(m1->GPIOx, m1->in2, m2->GPIOx, m2->in2, GPIO_PIN_RESET);
+	}
 }
 
 static void motor_do_one_step(struct stepper_motor *m, int direction) {
@@ -102,5 +151,14 @@ void motor_do_steps(struct stepper_motor *m, size_t nsteps, int direction) {
 
 	while (i-- > 0) {
 		motor_do_one_step(m, direction);
+	}
+}
+
+void motor_do_steps2(struct stepper_motor *m1, struct stepper_motor *m2,
+		 size_t nsteps, int direction) {
+	int i = nsteps;
+
+	while (i-- > 0) {
+		motor_do_one_step2(m1, m2, direction);
 	}
 }
