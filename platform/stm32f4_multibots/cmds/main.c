@@ -34,11 +34,11 @@ static void init_leds() {
 static void main_loop(void) {
 	struct stepper_motor motor1, motor2;
 
-	__GPIOA_CLK_ENABLE(); /* for motors */
+	__GPIOD_CLK_ENABLE(); /* for motors */
 	__GPIOE_CLK_ENABLE(); /* for motors */
 
 	nrf24_enable();
-	motor_init(&motor1, GPIO_PIN_0, GPIO_PIN_2, GPIO_PIN_4, GPIO_PIN_6, GPIOA);
+	motor_init(&motor1, GPIO_PIN_0, GPIO_PIN_2, GPIO_PIN_4, GPIO_PIN_6, GPIOD);
 	motor_init(&motor2, GPIO_PIN_8, GPIO_PIN_10, GPIO_PIN_12, GPIO_PIN_14, GPIOE);
 	motor_set_speed(&motor1, MOTOR_MAX_SPEED);
 	motor_set_speed(&motor2, MOTOR_MAX_SPEED);
@@ -47,8 +47,7 @@ static void main_loop(void) {
 
 	stm32_delay(1000000);
 	while (1) {
-		motor_do_steps(&motor1, 3 * MOTOR_STEPS_PER_REVOLUTION, MOTOR_RUN_FORWARD);
-		motor_do_steps(&motor2, 3 * MOTOR_STEPS_PER_REVOLUTION, MOTOR_RUN_FORWARD);
+		motor_do_steps2(&motor1, &motor2, 3 * MOTOR_STEPS_PER_REVOLUTION, MOTOR_RUN_FORWARD);
 		stm32_delay(5000000);
 	}
 }
