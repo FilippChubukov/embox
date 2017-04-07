@@ -9,7 +9,7 @@
 #ifndef STEPPER_MOTOR_H_
 #define STEPPER_MOTOR_H_
 
-#define MOTOR_MIN_DELAY            1500
+#define MOTOR_MIN_DELAY            15000
 #define MOTOR_MAX_SPEED            1 // Corresponds to MOTOR_MIN_DELAY
 #define MOTOR_DEFAULT_SPEED        10 // Corresponds to MOTOR_MIN_DELAY * 10
 #define MOTOR_STEP_SIZE            64

@@ -66,6 +66,7 @@ static void motor_do_one_step2(struct stepper_motor *m1, struct stepper_motor *m
 	if (direction == MOTOR_RUN_FORWARD) {
 		stm32_delay(delay);
 		DO_STEPS(m1->GPIOx, m1->in1, m2->GPIOx, m2->in1, GPIO_PIN_SET);
+		stm32_delay(delay);
 		DO_STEPS(m1->GPIOx, m1->in2, m2->GPIOx, m2->in2, GPIO_PIN_SET);
 		stm32_delay(delay);
 		DO_STEPS(m1->GPIOx, m1->in1, m2->GPIOx, m2->in1, GPIO_PIN_RESET);
@@ -84,6 +85,7 @@ static void motor_do_one_step2(struct stepper_motor *m1, struct stepper_motor *m
 	} else {
 		stm32_delay(delay);
 		DO_STEPS(m1->GPIOx, m1->in1, m2->GPIOx, m2->in1, GPIO_PIN_SET);
+		stm32_delay(delay);
 		DO_STEPS(m1->GPIOx, m1->in4, m2->GPIOx, m2->in4, GPIO_PIN_SET);
 		stm32_delay(delay);
 		DO_STEPS(m1->GPIOx, m1->in1, m2->GPIOx, m2->in1, GPIO_PIN_RESET);
