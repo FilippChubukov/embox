@@ -91,6 +91,14 @@ module gy_30 {
 	depends embox.driver.i2c.stm32f4.i2c
 }
 
+@BuildDepends(third_party.bsp.stmf4cube.core)
+static module gy_30_lib {
+	source "gy_30_lib.c"
+
+	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends embox.driver.i2c.stm32f4.i2c
+}
+
 @AutoCmd
 @Cmd(name="i2c_master", help="I2C")
 @BuildDepends(third_party.bsp.stmf4cube.core)
@@ -129,10 +137,22 @@ static module stepper_motor {
 @Cmd(name="robot_test", help="Robot test")
 @BuildDepends(third_party.bsp.stmf4cube.core)
 module robot_test {
+	option number log_level=4
+
 	source "main.c"
 
 	depends stepper_motor
 	depends ir
+	depends gy_30_lib
+
+	depends third_party.bsp.stmf4cube.stm32f4_discovery
+}
+
+@AutoCmd
+@Cmd(name="ir_test", help="IR test")
+@BuildDepends(third_party.bsp.stmf4cube.core)
+module ir_test {
+	source "ir_test.c"
 
 	depends third_party.bsp.stmf4cube.stm32f4_discovery
 }
