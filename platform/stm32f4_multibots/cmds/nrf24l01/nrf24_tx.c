@@ -7,14 +7,9 @@
 
 #include "stm32f4_discovery.h"
 
-#include "nrf24.h"
-
-#include <kernel/irq.h>
-#include <kernel/printk.h>
+#include <libs/nrf24.h>
 
 extern int spi_init(void);
-
-static int EXTILine0_Config(void);
 
 static void spi_delay(int n) {
 	int i = n;
@@ -22,18 +17,19 @@ static void spi_delay(int n) {
 		;
 }
 
-extern uint8_t spi_transfer(uint8_t tx);
-
 static void nrf24_test(void) {
-	uint8_t rx_address[5] = {0xA7,0x95,0xF1,0x36,0x07};
-	uint8_t tx_address[5] = {0xA7,0x95,0xF1,0x36,0x06};
+	uint8_t rx_address[5] = {0xA7,0x95,0xF1,0x36,0x06};
+	uint8_t tx_address[5] = {0xA7,0x95,0xF1,0x36,0x07};
 	//uint8_t tx_address[5] = {0x17,0x97,0xA7,0xA7,0xD7};
 	uint8_t addr[10] = {0x1};
 	uint8_t val = 0x17;
 	uint8_t reg;
+	uint8_t temp;
+	uint8_t q = 0;
+	uint8_t data_array[6];
 
 	spi_delay(1000000);
-	/* init hardware pins */
+    /* init hardware pins */
 	nrf24_init();
 
 	if (spi_init() < 0) {
@@ -51,10 +47,6 @@ static void nrf24_test(void) {
 	printf("RF_SETUP = %x\n", reg);
 	nrf24_readRegister(SETUP_AW, &reg, 1);
 	printf("SETUP_AW = %x\n", reg);
-	nrf24_readRegister(SETUP_RETR, &reg, 1);
-	printf("SETUP_RETR = %x\n", reg);
-	nrf24_readRegister(FIFO_STATUS, &reg, 1);
-	printf("FIFO_STATUS = %x\n", reg);
 
 	nrf24_readRegister(RF_CH, &reg, 1);
 	printf("RF_CH = %x\n", reg);
@@ -95,13 +87,6 @@ static void nrf24_test(void) {
 	/* Channel #2 , payload length: 4 */
 	nrf24_config(16,6);
 
-	if (EXTILine0_Config() < 0) {
-		printf("EXTILine0_Config error!!!!!\n");
-	}
-
-    nrf24_readRegister(FIFO_STATUS,&reg,1);
-	printf("!> 1 FIFO_STATUS = %2X\n", reg);
-
 	spi_delay(1000000);
 
 	nrf24_readRegister(CONFIG, &reg, 1);
@@ -120,64 +105,60 @@ static void nrf24_test(void) {
 	//spi_delay(1000000);
 	nrf24_readRegister(RX_ADDR_P1, addr, 5);
 	printf("RX_ADDR_P1 addr is: %x %x %x %x %x\n", addr[0], addr[1], addr[2], addr[3], addr[4]);
-    
-	nrf24_readRegister(FIFO_STATUS,&reg,1);
-	printf("!!!!!!> 2 FIFO_STATUS = %2X\n", reg);
 
-	nrf24_readRegister(FIFO_STATUS,&reg,1);
-	printf("!!!!!!> 3 FIFO_STATUS = %2X\n", reg);
+	/* Set the device addresses */
+	//nrf24_tx_address(rx_address);
+	//nrf24_rx_address(rx_address);
 
-	while (1)
-		;
-}
+    nrf24_ce_digitalWrite(HIGH);
 
-static irq_return_t exti0_handler(unsigned int irq_nr, void *data) {
-	uint8_t status;
-	uint8_t data_array[6];
+	reg = nrf24_getStatus();
+	printf("STATUS = %x\n", reg);
 
-	if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_0) != RESET) {
-		__HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_0);
-	}
+    while(1)
+    {                
+		reg = nrf24_getStatus();
+		printf("STATUS = %x\n", reg);
 
-	status = nrf24_getStatus();
+        /* Fill the data buffer */
+        data_array[0] = 0x00;
+        data_array[1] = 0x00;
+        data_array[2] = q++;
+        data_array[3] = 0x25;
+        data_array[4] = 0x75 + q;
+        data_array[5] = data_array[4];                                    
 
-	nrf24_getData(data_array);
-	printf("> ");
-	printf("%2X ",data_array[0]);
-	printf("%2X ",data_array[1]);
-	printf("%2X ",data_array[2]);
-	printf("%2X ",data_array[3]);
-	printf("%2X ",data_array[4]);
-	printf("%2X\r\n",data_array[5]);
+        /* Automatically goes to TX mode */
+        nrf24_send(data_array);        
+        
+        /* Wait for transmission to end */
+        while(nrf24_isSending());
 
-	if (status & (1 << RX_DR)) {
-		nrf24_configRegister(STATUS,(1<<RX_DR) | (1<<TX_DS) | (1<<MAX_RT));
-	} else if (status & (1 << TX_DS)) {
-		nrf24_configRegister(STATUS,(1<<TX_DS));
-	} else if (status & (1 << MAX_RT)) {
-		nrf24_configRegister(STATUS,(1<<MAX_RT));
-	} else {
-		printk("(irq) Unknown interrupt\n");
-	}
+        /* Make analysis on last tranmission attempt */
+        temp = nrf24_lastMessageStatus();
 
-	return IRQ_HANDLED;
-}
+        if(temp == NRF24_TRANSMISSON_OK)
+        {                    
+            printf("> Tranmission went OK\r\n");
+        }
+        else if(temp == NRF24_MESSAGE_LOST)
+        {                    
+            printf("> Message is lost ...\r\n");    
+        }
+        
+		/* Retranmission count indicates the tranmission quality */
+		temp = nrf24_retransmissionCount();
+		printf("> Retranmission count: %d\r\n",temp);
 
-static int EXTILine0_Config(void) {
-	GPIO_InitTypeDef   GPIO_InitStructure;
+		/* Optionally, go back to RX mode ... */
+		nrf24_powerUpRx();
 
-	printf(">>>6 EXTILine0_Config\n");
+		/* Or you might want to power down after TX */
+		// nrf24_powerDown();            
 
-	/* Enable GPIOA clock */
-	__HAL_RCC_GPIOA_CLK_ENABLE();
-
-	/* Configure PA0 pin as input floating */
-	GPIO_InitStructure.Mode = GPIO_MODE_IT_FALLING;
-	GPIO_InitStructure.Pull = GPIO_NOPULL;
-	GPIO_InitStructure.Pin  = GPIO_PIN_0;
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStructure);
-
-	return irq_attach(EXTI0_IRQn + 16, exti0_handler, 0, NULL, "stm32 systick timer");
+		/* Wait a little ... */
+		spi_delay(2000000);
+    }
 }
 
 static void init_leds() {
@@ -188,11 +169,10 @@ static void init_leds() {
 }
 
 int main(int argc, char *argv[]) {
-	printf("NRF24 recv (irq) test start\n");
+	printf("NRF24 transmit test start\n");
 
 	init_leds();
-	BSP_LED_Toggle(LED5);
-
+    BSP_LED_Toggle(LED5);
 	nrf24_test();
 
 	return 0;

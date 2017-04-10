@@ -18,7 +18,7 @@
 #include "stm32f4_discovery.h"
 
 #include <drivers/i2c/stm32f4/stm32f4_i2c.h>
-#include "gy_30.h"
+#include <libs/gy_30.h>
 
 static void init_leds(void) {
 	BSP_LED_Init(LED3);

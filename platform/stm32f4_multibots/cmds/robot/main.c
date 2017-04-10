@@ -17,8 +17,8 @@
 #include <kernel/time/ktime.h>
 
 #include "stm32f4_discovery.h"
-#include "stepper_motor.h"
-#include "ir.h"
+#include <libs/stepper_motor.h>
+#include <libs/ir.h>
 
 #define BH1750_CONTINUOUS_HIGH_RES_MODE  0x10
 

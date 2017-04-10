@@ -1,0 +1,37 @@
+package stm32f4_multibot.cmd
+
+@AutoCmd
+@Cmd(name="nrf24_test", help="NRF24 test")
+@BuildDepends(third_party.bsp.stmf4cube.core)
+module nrf24_test {
+	option number spi=2
+
+	source "nrf24_test.c"
+
+	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends stm32f4_multibot.libs.spi
+}
+
+@AutoCmd
+@Cmd(name="nrf24_tx", help="NRF24 tx")
+@BuildDepends(third_party.bsp.stmf4cube.core)
+module nrf24_tx {
+	option number spi=2
+
+	source "nrf24_tx.c"
+
+	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends stm32f4_multibot.libs.nrf24
+}
+
+@AutoCmd
+@Cmd(name="nrf24_rx", help="NRF24 rx")
+@BuildDepends(third_party.bsp.stmf4cube.core)
+module nrf24_rx {
+	option number spi=2
+
+	source "nrf24_rx_irq.c"
+
+	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends stm32f4_multibot.libs.nrf24
+}

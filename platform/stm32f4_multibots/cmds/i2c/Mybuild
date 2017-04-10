@@ -1,0 +1,21 @@
+package stm32f4_multibot.cmd
+
+@AutoCmd
+@Cmd(name="i2c_master", help="I2C")
+@BuildDepends(third_party.bsp.stmf4cube.core)
+module i2c_master {
+	source "i2c_master.c"
+
+	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends embox.driver.i2c.stm32f4.i2c
+}
+
+@AutoCmd
+@Cmd(name="i2c_slave", help="I2C")
+@BuildDepends(third_party.bsp.stmf4cube.core)
+module i2c_slave {
+	source "i2c_slave.c"
+
+	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends embox.driver.i2c.stm32f4.i2c
+}
