@@ -6,7 +6,7 @@ package stm32f4_multibot.cmd
 module i2c_master {
 	source "i2c_master.c"
 
-	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends third_party.bsp.stmf4cube.stm32f4_discovery_bsp
 	depends embox.driver.i2c.stm32f4.i2c
 }
 
@@ -16,6 +16,6 @@ module i2c_master {
 module i2c_slave {
 	source "i2c_slave.c"
 
-	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends third_party.bsp.stmf4cube.stm32f4_discovery_bsp
 	depends embox.driver.i2c.stm32f4.i2c
 }

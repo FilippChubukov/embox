@@ -8,7 +8,7 @@ module nrf24_test {
 
 	source "nrf24_test.c"
 
-	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends third_party.bsp.stmf4cube.stm32f4_discovery_bsp
 	depends stm32f4_multibot.libs.spi
 }
 
@@ -20,7 +20,7 @@ module nrf24_tx {
 
 	source "nrf24_tx.c"
 
-	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends third_party.bsp.stmf4cube.stm32f4_discovery_bsp
 	depends stm32f4_multibot.libs.nrf24
 }
 
@@ -32,6 +32,6 @@ module nrf24_rx {
 
 	source "nrf24_rx_irq.c"
 
-	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends third_party.bsp.stmf4cube.stm32f4_discovery_bsp
 	depends stm32f4_multibot.libs.nrf24
 }

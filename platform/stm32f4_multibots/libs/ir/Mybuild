@@ -7,5 +7,5 @@ module ir {
 	@IncludeExport(path="libs")
 	source "ir.h"
 
-	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends third_party.bsp.stmf4cube.stm32f4_discovery_bsp
 }

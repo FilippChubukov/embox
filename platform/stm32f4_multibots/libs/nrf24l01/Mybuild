@@ -13,6 +13,6 @@ static module nrf24 {
 		"nrf24_hw.c",
 		"nrf24_lib.c"
 
-	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends third_party.bsp.stmf4cube.stm32f4_discovery_bsp
 	depends stm32f4_multibot.libs.spi
 }

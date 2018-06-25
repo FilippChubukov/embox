@@ -7,5 +7,5 @@ static module stepper_motor {
 	@IncludeExport(path="libs")
 	source "stepper_motor.h"
 
-	depends third_party.bsp.stmf4cube.stm32f4_discovery
+	depends third_party.bsp.stmf4cube.stm32f4_discovery_bsp
 }
