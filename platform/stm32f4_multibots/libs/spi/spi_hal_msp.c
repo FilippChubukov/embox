@@ -1,93 +1,109 @@
+/**
+ * @file
+ * @brief  SPI MSP layer derived from Cube
+ *
+ * @date   23.06.18
+ * @author Alexander Kalmuk
+ */
 
 #include <errno.h>
 #include <string.h>
-#include <stdio.h>
+#include <assert.h>
 #include <util/log.h>
-
 #include <embox/unit.h>
 
 #include "stm32f4_discovery.h"
 
-#define MODOPS_SPI OPTION_GET(NUMBER, spi)
+static int spix_sck_pin(void *spi) {
+	assert(spi == SPI1 || spi == SPI2);
+	return spi == SPI1 ? GPIO_PIN_3 : GPIO_PIN_13;
+}
 
-#if MODOPS_SPI == 1
-#define SPIx                             SPI1
-#define SPIx_CLK_ENABLE()                __HAL_RCC_SPI1_CLK_ENABLE()
-#define SPIx_SCK_GPIO_CLK_ENABLE()       __HAL_RCC_GPIOA_CLK_ENABLE()
-#define SPIx_MISO_GPIO_CLK_ENABLE()      __HAL_RCC_GPIOA_CLK_ENABLE()
-#define SPIx_MOSI_GPIO_CLK_ENABLE()      __HAL_RCC_GPIOA_CLK_ENABLE()
+static int spix_miso_pin(void *spi) {
+	assert(spi == SPI1 || spi == SPI2);
+	return spi == SPI1 ? GPIO_PIN_4 : GPIO_PIN_14;
+}
 
-#define SPIx_FORCE_RESET()               __HAL_RCC_SPI1_FORCE_RESET()
-#define SPIx_RELEASE_RESET()             __HAL_RCC_SPI1_RELEASE_RESET()
+static int spix_mosi_pin(void *spi) {
+	assert(spi == SPI1 || spi == SPI2);
+	return spi == SPI1 ? GPIO_PIN_5 : GPIO_PIN_15;
+}
 
-/* Definition for SPIx Pins */
-#define SPIx_SCK_PIN                     GPIO_PIN_5
-#define SPIx_SCK_GPIO_PORT               GPIOA
-#define SPIx_SCK_AF                      GPIO_AF5_SPI1
-#define SPIx_MISO_PIN                    GPIO_PIN_6
-#define SPIx_MISO_GPIO_PORT              GPIOA
-#define SPIx_MISO_AF                     GPIO_AF5_SPI1
-#define SPIx_MOSI_PIN                    GPIO_PIN_7
-#define SPIx_MOSI_GPIO_PORT              GPIOA
-#define SPIx_MOSI_AF                     GPIO_AF5_SPI1
-#elif MODOPS_SPI == 2
-#define SPIx                             SPI2
-#define SPIx_CLK_ENABLE()                __HAL_RCC_SPI2_CLK_ENABLE()
-#define SPIx_SCK_GPIO_CLK_ENABLE()       __HAL_RCC_GPIOB_CLK_ENABLE()
-#define SPIx_MISO_GPIO_CLK_ENABLE()      __HAL_RCC_GPIOB_CLK_ENABLE()
-#define SPIx_MOSI_GPIO_CLK_ENABLE()      __HAL_RCC_GPIOB_CLK_ENABLE()
+static int spix_sck_af(void *spi) {
+	assert(spi == SPI1 || spi == SPI2);
+	return spi == SPI1 ? GPIO_AF5_SPI1 : GPIO_AF5_SPI2;
+}
 
-#define SPIx_FORCE_RESET()               __HAL_RCC_SPI2_FORCE_RESET()
-#define SPIx_RELEASE_RESET()             __HAL_RCC_SPI2_RELEASE_RESET()
+static int spix_miso_af(void *spi) {
+	assert(spi == SPI1 || spi == SPI2);
+	return spi == SPI1 ? GPIO_AF5_SPI1 : GPIO_AF5_SPI2;
+}
 
-/* Definition for SPIx Pins */
-#define SPIx_SCK_PIN                     GPIO_PIN_13
-#define SPIx_SCK_GPIO_PORT               GPIOB
-#define SPIx_SCK_AF                      GPIO_AF5_SPI2
-#define SPIx_MISO_PIN                    GPIO_PIN_14
-#define SPIx_MISO_GPIO_PORT              GPIOB
-#define SPIx_MISO_AF                     GPIO_AF5_SPI2
-#define SPIx_MOSI_PIN                    GPIO_PIN_15
-#define SPIx_MOSI_GPIO_PORT              GPIOB
-#define SPIx_MOSI_AF                     GPIO_AF5_SPI2
-#else
-#error Unsupported SPI
-#endif
+static int spix_mosi_af(void *spi) {
+	assert(spi == SPI1 || spi == SPI2);
+	return spi == SPI1 ? GPIO_AF5_SPI1 : GPIO_AF5_SPI2;
+}
+
+static GPIO_TypeDef *spix_sck_port(void *spi) {
+	assert(spi == SPI1 || spi == SPI2);
+	return GPIOB;
+}
+
+static GPIO_TypeDef *spix_miso_port(void *spi) {
+	assert(spi == SPI1 || spi == SPI2);
+	return GPIOB;
+}
+
+static GPIO_TypeDef *spix_mosi_port(void *spi) {
+	assert(spi == SPI1 || spi == SPI2);
+	return GPIOB;
+}
+
+static void spix_enable_clocks(void *spi) {
+	assert(spi == SPI1 || spi == SPI2);
+	if (spi == SPI1) {
+		__HAL_RCC_GPIOB_CLK_ENABLE();
+		__HAL_RCC_SPI1_CLK_ENABLE();
+	} else if (spi == SPI2) {
+		__HAL_RCC_GPIOB_CLK_ENABLE();
+		__HAL_RCC_SPI2_CLK_ENABLE();
+	}
+}
 
 void HAL_SPI_MspInit(SPI_HandleTypeDef *hspi) {
-	GPIO_InitTypeDef  GPIO_InitStruct;
+	GPIO_InitTypeDef GPIO_InitStruct;
+	SPI_TypeDef *spi;
 
 	memset(&GPIO_InitStruct, 0, sizeof(GPIO_InitStruct));
 
 	log_debug("");
 
+	spi = hspi->Instance;
+
 	/*##-1- Enable peripherals and GPIO Clocks #################################*/
 	/* Enable GPIO TX/RX clock */
-	SPIx_SCK_GPIO_CLK_ENABLE();
-	SPIx_MISO_GPIO_CLK_ENABLE();
-	SPIx_MOSI_GPIO_CLK_ENABLE();
 	/* Enable SPI clock */
-	SPIx_CLK_ENABLE();
+	spix_enable_clocks(spi);
 
 	/*##-2- Configure peripheral GPIO ##########################################*/
 	/* SPI SCK GPIO pin configuration  */
-	GPIO_InitStruct.Pin       = SPIx_SCK_PIN;
+	GPIO_InitStruct.Pin       = spix_sck_pin(spi);
 	GPIO_InitStruct.Mode      = GPIO_MODE_AF_PP;
 	GPIO_InitStruct.Pull      = GPIO_PULLUP;
 	GPIO_InitStruct.Speed     = GPIO_SPEED_FAST;
-	GPIO_InitStruct.Alternate = SPIx_SCK_AF;
+	GPIO_InitStruct.Alternate = spix_sck_af(spi);
 
-	HAL_GPIO_Init(SPIx_SCK_GPIO_PORT, &GPIO_InitStruct);
+	HAL_GPIO_Init(spix_sck_port(spi), &GPIO_InitStruct);
 
 	/* SPI MISO GPIO pin configuration  */
-	GPIO_InitStruct.Pin = SPIx_MISO_PIN;
-	GPIO_InitStruct.Alternate = SPIx_MISO_AF;
+	GPIO_InitStruct.Pin = spix_miso_pin(spi);
+	GPIO_InitStruct.Alternate = spix_miso_af(spi);
 
-	HAL_GPIO_Init(SPIx_MISO_GPIO_PORT, &GPIO_InitStruct);
+	HAL_GPIO_Init(spix_miso_port(spi), &GPIO_InitStruct);
 
 	/* SPI MOSI GPIO pin configuration  */
-	GPIO_InitStruct.Pin = SPIx_MOSI_PIN;
-	GPIO_InitStruct.Alternate = SPIx_MOSI_AF;
+	GPIO_InitStruct.Pin = spix_mosi_pin(spi);
+	GPIO_InitStruct.Alternate = spix_mosi_af(spi);
 
-	HAL_GPIO_Init(SPIx_MOSI_GPIO_PORT, &GPIO_InitStruct);
+	HAL_GPIO_Init(spix_mosi_port(spi), &GPIO_InitStruct);
 }
