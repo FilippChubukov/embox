@@ -4,8 +4,6 @@ package stm32f4_multibot.cmd
 @Cmd(name="spi_master", help="SPI master")
 @BuildDepends(third_party.bsp.stmf4cube.core)
 module spi_master {
-	option number spi=1
-
 	source "spi_master.c"
 
 	depends third_party.bsp.stmf4cube.stm32f4_discovery
@@ -16,8 +14,6 @@ module spi_master {
 @Cmd(name="spi_slave", help="SPI slave")
 @BuildDepends(third_party.bsp.stmf4cube.core)
 module spi_slave {
-	option number spi=2
-
 	source "spi_slave.c"
 
 	depends third_party.bsp.stmf4cube.stm32f4_discovery

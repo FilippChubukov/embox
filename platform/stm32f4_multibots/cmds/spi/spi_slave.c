@@ -1,71 +1,46 @@
+/**
+ * @file
+ * @brief  SPI Slave
+ *
+ * @date   23.06.18
+ * @author Alexander Kalmuk
+ */
 
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #include <embox/unit.h>
 
 #include "stm32f4_discovery.h"
-
-#define MODOPS_SPI OPTION_GET(NUMBER, spi)
-
-#if MODOPS_SPI == 1
-#define SPIx                             SPI1
-#define SPIx_CLK_ENABLE()                __HAL_RCC_SPI1_CLK_ENABLE()
-#define SPIx_SCK_GPIO_CLK_ENABLE()       __HAL_RCC_GPIOB_CLK_ENABLE()
-#define SPIx_MISO_GPIO_CLK_ENABLE()      __HAL_RCC_GPIOB_CLK_ENABLE()
-#define SPIx_MOSI_GPIO_CLK_ENABLE()      __HAL_RCC_GPIOB_CLK_ENABLE()
-
-#define SPIx_FORCE_RESET()               __HAL_RCC_SPI1_FORCE_RESET()
-#define SPIx_RELEASE_RESET()             __HAL_RCC_SPI1_RELEASE_RESET()
-
-/* Definition for SPIx Pins */
-#define SPIx_SCK_PIN                     GPIO_PIN_3
-#define SPIx_SCK_GPIO_PORT               GPIOB
-#define SPIx_SCK_AF                      GPIO_AF5_SPI1
-#define SPIx_MISO_PIN                    GPIO_PIN_4
-#define SPIx_MISO_GPIO_PORT              GPIOB
-#define SPIx_MISO_AF                     GPIO_AF5_SPI1
-#define SPIx_MOSI_PIN                    GPIO_PIN_5
-#define SPIx_MOSI_GPIO_PORT              GPIOB
-#define SPIx_MOSI_AF                     GPIO_AF5_SPI1
-#elif MODOPS_SPI == 2
-#define SPIx                             SPI2
-#define SPIx_CLK_ENABLE()                __HAL_RCC_SPI2_CLK_ENABLE()
-#define SPIx_SCK_GPIO_CLK_ENABLE()       __HAL_RCC_GPIOB_CLK_ENABLE()
-#define SPIx_MISO_GPIO_CLK_ENABLE()      __HAL_RCC_GPIOB_CLK_ENABLE()
-#define SPIx_MOSI_GPIO_CLK_ENABLE()      __HAL_RCC_GPIOB_CLK_ENABLE()
-
-#define SPIx_FORCE_RESET()               __HAL_RCC_SPI2_FORCE_RESET()
-#define SPIx_RELEASE_RESET()             __HAL_RCC_SPI2_RELEASE_RESET()
-
-/* Definition for SPIx Pins */
-#define SPIx_SCK_PIN                     GPIO_PIN_13
-#define SPIx_SCK_GPIO_PORT               GPIOB
-#define SPIx_SCK_AF                      GPIO_AF5_SPI2
-#define SPIx_MISO_PIN                    GPIO_PIN_14
-#define SPIx_MISO_GPIO_PORT              GPIOB
-#define SPIx_MISO_AF                     GPIO_AF5_SPI2
-#define SPIx_MOSI_PIN                    GPIO_PIN_15
-#define SPIx_MOSI_GPIO_PORT              GPIOB
-#define SPIx_MOSI_AF                     GPIO_AF5_SPI2
-#else
-#error Unsupported SPI
-#endif
 
 #define SPI_SLAVE_SYNBYTE         0x53
 #define SPI_MASTER_SYNBYTE        0xAC
 
 #define SPI_TIMEOUT_MAX           1000000000
 
-SPI_HandleTypeDef SpiHandle;
+static SPI_HandleTypeDef SpiHandle;
 
-static int spi_init(void) {
-	SpiHandle.Instance               = SPIx;
-	SpiHandle.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256;
+static int spi_init(int spi_nr) {
+	SPI_TypeDef *spi;
+
+	switch (spi_nr) {
+	case 1:
+		spi = SPI1;
+		break;
+	case 2:
+		spi = SPI2;
+		break;
+	default:
+		return -1;
+	}
+
+	SpiHandle.Instance               = spi;
+	SpiHandle.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
 	SpiHandle.Init.Direction         = SPI_DIRECTION_2LINES;
 	SpiHandle.Init.CLKPhase          = SPI_PHASE_1EDGE;
-	SpiHandle.Init.CLKPolarity       = SPI_POLARITY_HIGH;
+	SpiHandle.Init.CLKPolarity       = SPI_POLARITY_LOW;
 	SpiHandle.Init.CRCCalculation    = SPI_CRCCALCULATION_DISABLE;
 	SpiHandle.Init.CRCPolynomial     = 7;
 	SpiHandle.Init.DataSize          = SPI_DATASIZE_8BIT;
@@ -83,8 +58,9 @@ static int spi_init(void) {
 }
 
 static void spi_sync(void) {
-	printf("Slave trying to sync\n");
 	uint8_t txackbytes = SPI_SLAVE_SYNBYTE, rxackbytes = 0x00;
+
+	printf("Slave is trying to sync\n");
 
 	do {
 		rxackbytes = 0x0;
@@ -92,8 +68,7 @@ static void spi_sync(void) {
 		if (HAL_SPI_TransmitReceive(&SpiHandle, (uint8_t *)&txackbytes, (uint8_t *)&rxackbytes, 1, HAL_MAX_DELAY) != HAL_OK) {
 			printf("%s\n", ">>> spi_sync error");
 		}
-		//printf("S ");
-	} while(rxackbytes != SPI_MASTER_SYNBYTE);
+	} while (rxackbytes != SPI_MASTER_SYNBYTE);
 }
 
 static void spi_delay(int n) {
@@ -108,7 +83,7 @@ static int spi_test(void) {
 
 	printf("SPI test\n");
 
-	while(1) {
+	while (1) {
 		spi_delay(1000000);
 		res = 0;
 		// sync
@@ -139,19 +114,45 @@ static void init_leds() {
 	BSP_LED_Init(LED6);
 }
 
+static void print_usage(void) {
+	printf("Usage: spi_slave [-h] -s <spi_nr>\n");
+}
+
 int main(int argc, char *argv[]) {
-	int res;
+	int res, opt;
+	int spi_nr;
 
-	printf("SPI slave start!\n");
+	if (argc <= 1) {
+		print_usage();
+		return -EINVAL;
+	}
 
-	//HAL_Init();
+	getopt_init();
+
+	while (-1 != (opt = getopt(argc, argv, "hs:"))) {
+		printf("\n");
+		switch (opt) {
+		case '?':
+		case 'h':
+		default:
+			print_usage();
+			return 0;
+		case 's':
+			if ((optarg == NULL) || (!sscanf(optarg, "%d", &spi_nr))) {
+				print_usage();
+				return 0;
+			}
+			break;
+		}
+	}
 
 	init_leds();
-	res = spi_init();
+	res = spi_init(spi_nr);
 	if (res < 0) {
 		return -1;
 	}
     BSP_LED_Toggle(LED4);
+	printf("SPI slave started on SPI%d\n", spi_nr);
 	spi_test();
 
 	return 0;
