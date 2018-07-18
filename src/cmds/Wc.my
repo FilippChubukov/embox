@@ -1,0 +1,21 @@
+package embox.cmd
+
+@AutoCmd
+@Cmd(name = "wc",
+	help = "wc command",
+	man = '''
+		NAME
+			wc - str, words, char
+		SYNOPSIS
+			wc NAME
+
+		DESCRIPTION
+			doing "to syo"
+		AUTHORS
+			Filipp Chubukov
+	''')
+module wc {
+	source "wc.c"
+
+	
+}
