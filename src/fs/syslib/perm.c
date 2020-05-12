@@ -12,13 +12,15 @@
 #include <sys/stat.h>
 
 #include <fs/vfs.h>
+#include <fs/inode.h>
+#include <fs/inode_operation.h>
 #include <fs/hlpr_path.h>
 #include <fs/dcache.h>
 
 #include <security/security.h>
 
-int fs_perm_mask(struct node *node) {
-	int perm = node->mode & S_IRWXA;
+int fs_perm_mask(struct inode *node) {
+	int perm = node->i_mode & S_IRWXA;
 	uid_t uid = getuid();
 
 	if (uid == 0) {
@@ -36,7 +38,7 @@ int fs_perm_mask(struct node *node) {
 	return perm;
 }
 
-int fs_perm_check(struct node *node, int fd_flags) {
+int fs_perm_check(struct inode *node, int fd_flags) {
 	/* Here, we rely on the fact that fd_flags correspond to OTH perm bits. */
 	return (fd_flags & ~fs_perm_mask(node)) ? -EACCES :
 		security_node_permissions(node, fd_flags);
@@ -56,6 +58,7 @@ static int quick_lookup(const char *path, struct path *nodelast) {
 int fs_perm_lookup(const char *path, const char **pathlast,
 		struct path *nodelast) {
 	struct path node_path;
+	struct path dir_path;
 	size_t len = 0;
 	int ret;
 
@@ -63,12 +66,15 @@ int fs_perm_lookup(const char *path, const char **pathlast,
 		return -EINVAL;
 	}
 
-	if (path[0] == '/')
+	if (path[0] == '/') {
 		vfs_get_root_path(&node_path);
-	else
+	} else {
 		vfs_get_leaf_path(&node_path);
+	}
 
-	while (1) {
+	do {
+		struct inode *dnode;
+
 		path = path_next(path + len, &len);
 
 		*nodelast = node_path;
@@ -85,15 +91,23 @@ int fs_perm_lookup(const char *path, const char **pathlast,
 			return ret;
 		}
 
+		dir_path = node_path;
+		if_mounted_follow_down(&node_path);
+		dnode = node_path.node;
 		vfs_lookup_childn(&node_path, path, len, &node_path);
 
 		if (NULL == node_path.node) {
-			return -ENOENT;
+			if (dnode && dnode->i_ops && dnode->i_ops->lookup) {
+				dnode->i_ops->lookup(path, NULL);
+			} else {
+				return -ENOENT;
+			}
+			vfs_lookup_childn(&dir_path, path, len, &node_path);
 		}
 
-	}
+	} while (node_path.node);
 
-	return 0;
+	return -ENOENT;
 }
 
 int fs_perm_lookup_relative(const char *path, const char **pathlast,

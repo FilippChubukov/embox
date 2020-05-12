@@ -11,7 +11,7 @@
 
 #include <util/log.h>
 
-#include <drivers/gpio.h>
+#include <drivers/gpio/gpio.h>
 #include <drivers/common/memory.h>
 #include <hal/reg.h>
 #include <kernel/printk.h>
@@ -454,17 +454,14 @@ static irq_return_t arasan_int_handler(unsigned int irq_num, void *dev_id) {
 }
 
 static void arasan_phy_reset(void) {
-	struct gpio *gpio_port;
 	volatile int i;
 
-	gpio_port = gpio_by_num(PHY_RESET_PORT);
-
-	gpio_settings(gpio_port, 1 << PHY_RESET_PIN, GPIO_MODE_OUTPUT);
+	gpio_setup_mode(PHY_RESET_PORT, 1 << PHY_RESET_PIN, GPIO_MODE_OUTPUT);
 
 	for (i=100000; i > 0; i--) {
 	}
 
-	gpio_set_level(gpio_port, 1 << PHY_RESET_PIN, 1);
+	gpio_set(PHY_RESET_PORT, 1 << PHY_RESET_PIN, 1);
 }
 
 
@@ -504,18 +501,6 @@ static int arasan_init(void) {
 	return inetdev_register_dev(nic);
 }
 
-static struct periph_memory_desc arasan_mem = {
-	.start = BASE_ADDR,
-	.len   = 0x200
-};
+PERIPH_MEMORY_DEFINE(arasan, BASE_ADDR, 0x200);
 
-PERIPH_MEMORY_DEFINE(arasan_mem);
-
-
-
-static struct periph_memory_desc cmctr_mem = {
-	.start = CMCTR_BASE,
-	.len   = 0x200
-};
-
-PERIPH_MEMORY_DEFINE(cmctr_mem);
+PERIPH_MEMORY_DEFINE(cmctr, CMCTR_BASE, 0x200);

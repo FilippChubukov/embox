@@ -3,8 +3,15 @@ package embox.fs
 module node {
 	option number fnode_quantity=64
 
-	source "node.c"
+	source "inode.c"
+	source "dentry.c"
 
+	@IncludeExport(path="fs")
+	source "inode.h"
+	@IncludeExport(path="fs")
+	source "dentry.h"
+
+	depends embox.driver.block_dev
 	depends embox.kernel.thread.mutex
 	@NoRuntime depends embox.util.tree
 }
@@ -13,7 +20,7 @@ module filesystem {
 	option number fs_quantity=32
 	option number mount_desc_quantity=16
 
-	source "file_system.c"
+	source "super_block.c"
 	source "mount_table.c"
 
 	depends embox.fs.driver.repo
@@ -22,7 +29,10 @@ module filesystem {
 module file_desc {
 	option number fdesc_quantity=32
 
+	@IncludeExport(path="fs")
+	source "file_desc.h"
 	source "file_desc.c"
+
 	source "file_xattr.c"
 
 	depends idesc
@@ -54,6 +64,8 @@ module no_file_system extends fs_api{
 
 module xattr {
 	source "xattr.c"
+
+	depends embox.security.api
 }
 
 module xattr_list {
@@ -67,6 +79,7 @@ module path_helper {
 module core extends fs_api {
 	source "vfs.c"
 
+	depends file_desc
 	depends filesystem
 	depends path_helper
 	depends node
@@ -76,6 +89,8 @@ module core extends fs_api {
 	depends embox.util.tree
 	depends embox.compat.posix.proc.uid
 
+	depends embox.kernel.task.resource.vfs
+
 	depends embox.kernel.task.api //vfs_get_leaf: environment should be initialized
 }
 
@@ -83,7 +98,6 @@ module index_operation {
 	source "index_operation.c"
 
 	depends embox.fs.syslib.file
-	depends fs_api
 }
 
 @DefaultImpl(rootfs)
@@ -94,6 +108,7 @@ module rootfs extends root_file_system {
 	source "rootfs.c"
 	option string fstype = "initfs"
 	option string bdev = ""
+	@NoRuntime depends driver.devfs_old
 	depends driver.repo
 	depends node
 	depends embox.fs.filesystem
@@ -107,10 +122,10 @@ module rootfs_dvfs extends root_file_system {
 	option string fstype = "initfs"
 	option string bdev = ""
 
-	depends embox.driver.block_common
+	depends embox.driver.block_dev
 	depends embox.driver.char_dev
 	depends embox.fs.dvfs.core
-	depends embox.fs.driver.dvfs_driver
+	depends embox.fs.driver.repo
 	depends embox.kernel.task.api
 }
 
@@ -123,14 +138,14 @@ module journal {
 	depends buffer_cache
 	depends embox.mem.slab
 
-	depends embox.util.DList
+	depends embox.util.dlist
 }
 
 module buffer_cache {
 	source "bcache.c"
 	option number bcache_size=128
+	option number bcache_align=512
 
-	depends embox.compat.libc.all
 	depends embox.mem.pool
 	depends embox.kernel.thread.mutex
 

@@ -118,10 +118,11 @@ static int ensure_dinode(struct nas *nas) {
 	return 0;
 }
 
-static int xattr_block(struct node *node, struct ext2_xattr_hdr **blk,
+static int xattr_block(struct inode *node, struct ext2_xattr_hdr **blk,
 		char check_magic) {
 	struct ext2fs_dinode *dinode;
 	struct ext2_xattr_hdr *xattr_blk;
+	struct super_block *sb;
 	int res;
 
 	assert(node->nas);
@@ -130,17 +131,18 @@ static int xattr_block(struct node *node, struct ext2_xattr_hdr **blk,
 		return res;
 	}
 
-	dinode = node->nas->fi->privdata;
+	dinode = inode_priv(node);
 
 	if (!dinode->i_facl) {
 		return -ENOENT;
 	}
 
-	if (NULL == (xattr_blk = ext2_buff_alloc(node->nas, BBSIZE))) {
+	sb = node->nas->fs;
+	if (NULL == (xattr_blk = ext2_buff_alloc(sb->sb_data, BBSIZE))) {
 		return -ENOMEM;
 	}
 
-	if (0 > (res = ext2_read_sector(node->nas, (char *) xattr_blk, 1,
+	if (0 > (res = ext2_read_sector(sb, (char *) xattr_blk, 1,
 			d2h32(dinode->i_facl)))) {
 		ext2_buff_free(node->nas, (char *) xattr_blk);
 		return res;
@@ -174,7 +176,7 @@ static void block_rehash(struct ext2_xattr_hdr *xattr_blk) {
 	xattr_blk->h_hash = h2d32(hash);
 }
 
-int ext2fs_listxattr(struct node *node, char *list, size_t len) {
+int ext2fs_listxattr(struct inode *node, char *list, size_t len) {
 	struct ext2_xattr_hdr *xattr_blk;
 	struct ext2_xattr_ent *xattr_ent;
 	int res, last_len = len;
@@ -276,15 +278,18 @@ static void str_val(struct ext2_xattr_hdr *xattr_blk,
 	xattr_ent->e_value_offs = h2d32(*min_value_offs);
 }
 
-int ext2fs_setxattr(struct node *node, const char *name, const char *value,
+int ext2fs_setxattr(struct inode *node, const char *name, const char *value,
 		size_t len, int flags) {
 	struct ext2_xattr_hdr *xattr_blk = NULL;
 	struct ext2_xattr_ent *xattr_ent, *i_ent;
-	struct ext2fs_dinode *dinode = node->nas->fi->privdata;
+	struct ext2fs_dinode *dinode = inode_priv(node);
 	int xblk_n, min_value_offs = BBSIZE, name_len = strlen(name);
 	int res = 0;
+	struct super_block *sb;
 
 	assert(node->nas);
+
+	sb = node->nas->fs;
 
 	if (0 != (res = xattr_block(node, &xattr_blk, 1))) {
 		if (res != -ENOENT) {
@@ -305,7 +310,7 @@ int ext2fs_setxattr(struct node *node, const char *name, const char *value,
 		}
 
 		{
-			struct ext2_fs_info *fsi = node->nas->fs->fsi;
+			struct ext2_fs_info *fsi = sb->sb_data;
 			dinode->i_facl = h2d32(xblk_n);
 			dinode->i_blocks = h2d32(d2h32(dinode->i_blocks) +
 					fsi->s_sectors_in_block);
@@ -331,7 +336,7 @@ int ext2fs_setxattr(struct node *node, const char *name, const char *value,
 			goto cleanup_out;
 		}
 
-		if (NULL == (blk_copy = ext2_buff_alloc(node->nas, BBSIZE))) {
+		if (NULL == (blk_copy = ext2_buff_alloc(sb->sb_data, BBSIZE))) {
 			res = -ENOMEM;
 			goto cleanup_out;
 		}
@@ -345,7 +350,7 @@ int ext2fs_setxattr(struct node *node, const char *name, const char *value,
 
 		xattr_bswap(xattr_blk, xattr_blk, SECTOR_SIZE);
 
-		if ((res = ext2_write_sector(node->nas, (char *) xattr_blk,
+		if ((res = ext2_write_sector(sb, (char *) xattr_blk,
 						1, d2h32(dinode->i_facl)))) {
 			res = -EIO;
 			goto cleanup_out;
@@ -431,7 +436,7 @@ int ext2fs_setxattr(struct node *node, const char *name, const char *value,
 
 	block_rehash(xattr_blk);
 
-	ext2_write_sector(node->nas, (char *) xattr_blk, 1,
+	ext2_write_sector(sb, (char *) xattr_blk, 1,
 			d2h32(dinode->i_facl));
 
 cleanup_out:
@@ -442,7 +447,7 @@ cleanup_out:
 	return res;
 }
 
-int ext2fs_getxattr(struct node *node, const char *name, char *value,
+int ext2fs_getxattr(struct inode *node, const char *name, char *value,
 		size_t len) {
 	struct ext2_xattr_hdr *xattr_blk;
 	struct ext2_xattr_ent *xattr_ent;

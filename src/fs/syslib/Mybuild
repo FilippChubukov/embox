@@ -13,7 +13,7 @@ module fs_full extends file {
 	depends embox.fs.core
 	depends embox.fs.file_desc
 	depends embox.security.api
-
+	depends embox.compat.posix.util.gettimeofday /* kfile_change_stat */
 	depends perm
 }
 
@@ -39,6 +39,7 @@ module file_system_full extends file_system {
 
 	depends fs_full        // kfile_fill_stat
 
+	depends embox.driver.common
 	depends embox.fs.core
 	depends embox.fs.driver.repo
 	depends embox.fs.file_desc
@@ -61,9 +62,9 @@ module perm_full extends perm {
 
 	depends embox.compat.posix.util.environ
 	depends embox.compat.posix.proc.uid
+	depends embox.security.api
 	/* TODO tsort loop
 	depends embox.fs.core
-	depends embox.security.api
 	*/
 }
 

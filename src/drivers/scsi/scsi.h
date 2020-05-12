@@ -17,42 +17,34 @@
 
 struct scsi_dev;
 
-struct scsi_dev_state {
-	void (*sds_enter)(struct scsi_dev *sdev);
-	void (*sds_input)(struct scsi_dev *sdev, int req_status);
-	void (*sds_leave)(struct scsi_dev *sdev);
-};
-
 #define USB_SCSI_SCRATCHPAD_LEN 36
 struct scsi_dev {
 	int idx;
-	const struct scsi_dev_state *state;
-	const struct scsi_dev_state *holded_state;
-
-	uint8_t scsi_data_scratchpad[USB_SCSI_SCRATCHPAD_LEN];
 
 	unsigned int blk_size;
 	unsigned int blk_n;
 
 	struct block_dev *bdev;
 	struct mutex m;
-	struct waitq wq;
-	char in_cmd;
-	char cmd_complete;
 	char attached;
 	unsigned int use_count;
 };
 
 struct scsi_cmd {
-	uint8_t scmd_opcode;
+	uint8_t *scmd_buf;
 	size_t  scmd_len;
-	void    (*scmd_fixup)(void *buf, struct scsi_dev *dev,
-			struct scsi_cmd *cmd);
-	void    *scmd_obuf;
-	size_t  scmd_olen;
-
-	size_t  scmd_lba;
+	uint8_t *sdata_buf;
+	size_t  sdata_len;
 };
+
+#define SCSI_CMD_OPCODE_TEST_UNIT 0x00
+struct scsi_cmd_test_unit {
+	uint8_t  scsi_cmd_opcode;
+	uint8_t  __reserved[3];
+	uint8_t  control;
+	uint8_t  __pads[1];
+} __attribute__((packed));
+
 
 #define SCSI_CMD_OPCODE_INQUIRY 0x12
 struct scsi_cmd_inquiry {
@@ -66,9 +58,12 @@ struct scsi_cmd_inquiry {
 #define SCSI_INQIRY_DEVTYPE_MASK  0x1f
 #define SCSI_INQIRY_DEVTYPE_BLK   0x00
 
-#define SCSI_DATA_INQUIRY_VID_LEN 8
-#define SCSI_DATA_INQUIRY_PID_LEN 16
-#define SCSI_DATA_INQUIRY_REV_LEN 4
+#define SCSI_DATA_INQUIRY_VID_LEN     8
+#define SCSI_DATA_INQUIRY_PID_LEN     16
+#define SCSI_DATA_INQUIRY_REV_LEN     4
+
+#define SCSI_DATA_INQUIRY_PROTECT     0x1
+
 struct scsi_data_inquiry {
 	uint8_t dinq_devtype;
 	uint8_t dinq_removable;
@@ -92,11 +87,31 @@ struct scsi_cmd_cap10 {
 	uint8_t  sc10_reserve2;
 	uint8_t  sc10_pmi;
 	uint8_t  sc10_control;
+	uint8_t __sc10_padd[2];
 } __attribute__((packed));
 
 struct scsi_data_cap10 {
 	uint32_t dc10_lba;
 	uint32_t dc10_blklen;
+} __attribute__((packed));
+
+#define SCSI_CMD_OPCODE_CAP16 0x9E
+struct scsi_cmd_cap16 {
+	uint8_t  sc16_opcode;
+	uint8_t  sc16_service_action;
+	uint64_t sc16_block_addr;
+	uint32_t sc16_alloc_len;
+	uint8_t  sc16_pmi;
+	uint8_t  sc16_control;
+} __attribute__((packed));
+
+struct scsi_data_cap16 {
+	uint64_t dc16_lba;
+	uint32_t dc16_blklen;
+	uint8_t dc16_flags;
+	uint8_t dc16_exponent;
+	uint8_t dc16_aligned_lba;
+	uint8_t dc16_reserved[0x10];
 } __attribute__((packed));
 
 #define SCSI_CMD_OPCODE_SENSE 0x03
@@ -146,25 +161,12 @@ struct scsi_cmd_write10 {
 	uint8_t  sw10_control;
 } __attribute__((packed));
 
-extern const struct scsi_cmd scsi_cmd_template_inquiry;
-extern const struct scsi_cmd scsi_cmd_template_cap10;
-extern const struct scsi_cmd scsi_cmd_template_sense;
-extern const struct scsi_cmd scsi_cmd_template_read10;
-extern const struct scsi_cmd scsi_cmd_template_write10;
-
-int scsi_dev_init(struct scsi_dev *dev);
-void scsi_dev_attached(struct scsi_dev *dev);
-void scsi_dev_detached(struct scsi_dev *dev);
-void scsi_request_done(struct scsi_dev *dev, int res);
-void scsi_dev_wake(struct scsi_dev *dev, int res);
-void scsi_disk_bdev_try_unbind(struct scsi_dev *sdev);
-
-int scsi_do_cmd(struct scsi_dev *dev, struct scsi_cmd *cmd);
-
-void scsi_dev_recover(struct scsi_dev *dev);
-void scsi_state_transit(struct scsi_dev *dev, const struct scsi_dev_state *to);
-void scsi_dev_use_inc(struct scsi_dev *dev);
-void scsi_dev_use_dec(struct scsi_dev *dev);
+extern int scsi_dev_attached(struct scsi_dev *dev);
+extern void scsi_dev_detached(struct scsi_dev *dev);
+extern void scsi_disk_bdev_try_unbind(struct scsi_dev *sdev);
+extern int scsi_do_cmd(struct scsi_dev *dev, struct scsi_cmd *cmd);
+extern void scsi_dev_use_inc(struct scsi_dev *dev);
+extern void scsi_dev_use_dec(struct scsi_dev *dev);
 
 extern void scsi_disk_found(struct scsi_dev *dev);
 extern void scsi_disk_lost(struct scsi_dev *dev);

@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
+#include <fcntl.h>
 
 #include <drivers/input/keymap.h>
 #include <drivers/keyboard.h>
@@ -20,6 +21,7 @@
 #include <drivers/video/fb.h>
 #include <drivers/video/font.h>
 #include <drivers/tty.h>
+#include <drivers/char_dev.h>
 #include <fs/index_descriptor.h>
 #include <kernel/sched/sched_lock.h>
 #include <kernel/task.h>
@@ -140,14 +142,6 @@ static int fbcon_idesc_ioctl(struct idesc *idesc, int request, void *data) {
 	return tty_ioctl(&(fbcon->vterm.tty), request, data);
 }
 
-static int fbcon_idesc_fstat(struct idesc *idesc, void *buff) {
-       struct stat *st = buff;
-
-       st->st_mode = S_IFCHR;
-
-       return 0;
-}
-
 static int fbcon_idesc_status(struct idesc *idesc, int mask) {
 	struct fbcon *fbcon = data2fbcon(idesc);
 
@@ -162,7 +156,7 @@ static const struct idesc_ops fbcon_idesc_ops = {
 	.id_writev  = fbcon_idesc_write,
 	.close  = fbcon_idesc_close,
 	.ioctl  = fbcon_idesc_ioctl,
-	.fstat  = fbcon_idesc_fstat,
+	.fstat  = char_dev_idesc_fstat,
 	.status = fbcon_idesc_status,
 };
 
@@ -181,7 +175,7 @@ static void *run(void *data) {
 	close(1);
 	close(2);
 
-	idesc_init(&fbcon->idesc, &fbcon_idesc_ops, S_IROTH | S_IWOTH);
+	idesc_init(&fbcon->idesc, &fbcon_idesc_ops, O_RDWR);
 	fd = index_descriptor_add(&fbcon->idesc);
 	fbcon->vterm.tty.idesc = &fbcon->idesc;
 
@@ -388,7 +382,7 @@ static void fbcon_diag_putc(const struct diag *diag, char ch) {
 	vterm_putc(&fbcon_current->vterm, ch);
 }
 
-DIAG_OPS_DECLARE(
+DIAG_OPS_DEF(
 	.putc = fbcon_diag_putc,
 );
 

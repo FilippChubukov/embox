@@ -65,6 +65,13 @@ else
 ld_scripts_flag = $(if $(strip $1),-T $1)
 endif
 
+LD_DISABLE_RELAXATION ?= n
+ifeq (n,$(LD_DISABLE_RELAXATION))
+relax = --relax
+else
+relax = --no-relax
+endif
+
 # This must be expanded in a secondary expansion context.
 # NOTE: must be the last one in a list of prerequisites (contains order-only)
 common_prereqs = mk/image2.mk mk/flags.mk $(MKGEN_DIR)/build.mk \
@@ -152,7 +159,7 @@ $(image_relocatable_o): $(image_lds) $(embox_o) $$(common_prereqs)
 	-o $@
 
 $(image_nosymbols_o): $(image_lds) $(embox_o) $$(common_prereqs)
-	$(CC) -Wl,--relax \
+	$(CC) -Wl,$(relax) \
 	$(embox_o) \
 	$(FINAL_LDFLAGS) \
 	-Wl,--defsym=__symbol_table=0 \
@@ -162,7 +169,7 @@ $(image_nosymbols_o): $(image_lds) $(embox_o) $$(common_prereqs)
 	-o $@
 
 $(image_pass1_o): $(image_lds) $(embox_o) $(symbols_pass1_a) $$(common_prereqs)
-	$(CC) -Wl,--relax \
+	$(CC) -Wl,$(relax) \
 	$(embox_o) \
 	$(FINAL_LDFLAGS) \
 	$(symbols_pass1_a) \
@@ -171,7 +178,7 @@ $(image_pass1_o): $(image_lds) $(embox_o) $(symbols_pass1_a) $$(common_prereqs)
 	-o $@
 
 $(IMAGE): $(image_lds) $(embox_o) $(symbols_pass2_a) $$(common_prereqs)
-	$(CC) -Wl,--relax \
+	$(CC) -Wl,$(relax) \
 	$(embox_o) \
 	$(FINAL_LDFLAGS) \
 	$(symbols_pass2_a) \
@@ -190,7 +197,7 @@ $(image_relocatable_o): $(image_lds) $(embox_o) $$(common_prereqs)
 	-o $@
 
 $(image_nosymbols_o): $(image_lds) $(embox_o) $$(common_prereqs)
-	$(LD) --relax $(ldflags) \
+	$(LD) $(relax) $(ldflags) \
 	-T $(image_lds) \
 	$(embox_o) \
 	--defsym=__symbol_table=0 \
@@ -199,7 +206,7 @@ $(image_nosymbols_o): $(image_lds) $(embox_o) $$(common_prereqs)
 	-o $@
 
 $(image_pass1_o): $(image_lds) $(embox_o) $(symbols_pass1_a) $$(common_prereqs)
-	$(LD) --relax $(ldflags) \
+	$(LD) $(relax) $(ldflags) \
 	-T $(image_lds) \
 	$(embox_o) \
 	$(symbols_pass1_a) \
@@ -222,7 +229,7 @@ $(GEN_DIR)/md5sums1.c $(GEN_DIR)/md5sums2.c: $$(source)
 	done
 
 $(image_nocksum): $(image_lds) $(embox_o) $(md5sums1) $(symbols_pass2_a) $$(common_prereqs)
-	$(LD) --relax $(ldflags) \
+	$(LD) $(relax) $(ldflags) \
 	-T $(image_lds) \
 	$(embox_o) \
 	$(md5sums1) \
@@ -231,7 +238,7 @@ $(image_nocksum): $(image_lds) $(embox_o) $(md5sums1) $(symbols_pass2_a) $$(comm
 	-o $@
 
 $(IMAGE): $(image_lds) $(embox_o) $(md5sums2) $(symbols_pass2_a) $$(common_prereqs)
-	$(LD) --relax $(ldflags) \
+	$(LD) $(relax) $(ldflags) \
 	-T $(image_lds) \
 	$(embox_o) \
 	$(md5sums2) \
@@ -283,7 +290,7 @@ $(__cpio_files) : FORCE
 		$(foreach c,chmod chown,$(if $(and $($c),$(findstring $($c),'')),,$c $($c) $f;)) \
 		$(foreach a,$(strip $(subst ',,$(xattr))), \
 			attr -s $(basename $(subst =,.,$a)) -V $(subst .,,$(suffix $(subst =,.,$a))) $f;) \
-		find $f -name .gitkeep -type f -print0 | xargs -0 /bin/rm -rf)
+		find $f -name .gitkeep -type f -print0 | xargs -0 rm -rf)
 
 __copy_user_rootfs :
 	if [ -d $(USER_ROOTFS_DIR) ]; \

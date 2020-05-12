@@ -5,7 +5,7 @@
  * @version
  * @date 20.12.2017
  */
-
+#include <stdint.h>
 #include <asm/io.h>
 
 #include <embox/unit.h>
@@ -17,8 +17,9 @@
 #include <kernel/time/clock_source.h>
 #include <kernel/time/time_device.h>
 
-#define E2K_CLOCK_BASE 0x83200000
-#define IRQ_NR     2
+#define E2K_CLOCK_BASE (uintptr_t)0x83200000
+#define IRQ_NR     OPTION_GET(NUMBER, irq_num)
+#define LT_FREQ    OPTION_GET(NUMBER, freq)
 
 #define E2K_COUNTER_LIMIT	(E2K_CLOCK_BASE + 0x00)
 #define E2K_COUNTER_START_VALUE	(E2K_CLOCK_BASE + 0x04)
@@ -75,16 +76,15 @@ static irq_return_t e2k_clock_handler(unsigned int irq_nr, void *dev_id) {
 	return IRQ_HANDLED;
 }
 
-#define LT_FREQ 500
 static int e2k_clock_init(void) {
-	uint32_t clock_hz = (1 + (10000000 + LT_FREQ) / 2000);
+	uint32_t clock_hz = (10000000 + LT_FREQ / 2) / LT_FREQ;
 
 	clock_source_register(&e2k_clock_source);
 	irq_attach(IRQ_NR, e2k_clock_handler, 0, &e2k_clock_source, "e2k clock");
 
 	/* Setup frequency */
-	e2k_write32(clock_hz << 9, (void*)E2K_COUNTER_LIMIT);
-	e2k_write32(LT_INVERT_COUNTER_CNTR_LAUNCH, (void*)E2K_COUNTER_CONTROL);
+	e2k_write32(clock_hz << 9, E2K_COUNTER_LIMIT);
+	e2k_write32(LT_INVERT_COUNTER_CNTR_LAUNCH, E2K_COUNTER_CONTROL);
 
 	return 0;
 }
@@ -94,12 +94,17 @@ static int e2k_clock_config(struct time_dev_conf * conf) {
 }
 
 static cycle_t e2k_clock_read(void) {
+#if 0
+	/* TODO Should be checked, because values are looking a bit weird. */
 	return e2k_read32((void*)E2K_RESET_COUNTER_LOW); /* Ignore high 32 bits */
+#endif
+	return 0;
 }
 
 static struct time_event_device e2k_clock_event = {
 	.config   = e2k_clock_config,
-	.event_hz = 1000,
+	.event_hz = LT_FREQ,
+	.irq_nr = IRQ_NR
 };
 
 static struct time_counter_device e2k_clock_counter = {

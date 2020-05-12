@@ -7,7 +7,9 @@
  */
 #include <errno.h>
 #include <string.h>
+#include <stdbool.h>
 #include <util/member.h>
+#include <util/log.h>
 #include <mem/misc/pool.h>
 #include <drivers/usb/usb_hid.h>
 #include <drivers/usb/usb.h>
@@ -26,27 +28,6 @@ POOL_DEF(usb_hid_indevs, struct usb_hid_indev, USB_HID_MAX_DEVS);
 
 static void usb_hid_notify(struct usb_request *req, void *arg);
 
-static int usb_hid_event_get(struct input_dev *dev, struct input_event *ev) {
-	struct usb_hid_indev *hindev;
-
-	hindev = member_cast_out(dev, struct usb_hid_indev, input_dev);
-
-	ev->type = hindev->input_data[0];
-
-#if 0
-	printk("\nusb_hid: received =");
-	for (int i = 0; i < hindev->usb_dev->endpoints[1]->max_packet_size; i++) {
-		printk(" %.2x", hindev->input_data[i]);
-	}
-	printk("\n");
-#endif
-
-	ev->value = ((int16_t) hindev->input_data[1]) << 16
-		| (0xffff & ((int16_t) hindev->input_data[2]));
-
-	return 0;
-}
-
 static void usb_hid_intr_request(struct usb_hid_indev *hindev) {
 	struct usb_endp *intr_endp;
 
@@ -61,6 +42,7 @@ static void usb_hid_notify(struct usb_request *req, void *arg) {
 	struct usb_dev *dev = req->endp->dev;
 	struct usb_class_hid *hid = usb2hiddata(dev);
 	struct usb_hid_indev *hindev;
+	struct input_event ev;
 
 	hindev = member_cast_out(hid->indev, struct usb_hid_indev, input_dev);
 
@@ -68,7 +50,11 @@ static void usb_hid_notify(struct usb_request *req, void *arg) {
 		return;
 	}
 
-	input_dev_input(&hindev->input_dev);
+	ev.type = hindev->input_data[0];
+	ev.value = ((int16_t) hindev->input_data[1]) << 16
+		| (0xffff & ((int16_t) -hindev->input_data[2]));
+
+	input_dev_report_event(&hindev->input_dev, &ev);
 
 	usb_hid_intr_request(hindev);
 }
@@ -98,25 +84,26 @@ static int usb_hid_stop(struct input_dev *indev) {
 static const struct input_dev_ops usb_hid_input_ops = {
 	.start = usb_hid_start,
 	.stop = usb_hid_stop,
-	.event_get = usb_hid_event_get,
 };
 
 static void usb_hid_indev_init(struct input_dev *indev) {
 
-	indev->name = "usb_hid";
+	indev->name = "usb-mouse";
 	indev->type = INPUT_DEV_MOUSE;
 	indev->ops = &usb_hid_input_ops;
-	indev->irq = 0;
 }
 
 int usb_hid_found(struct usb_dev *dev) {
 	struct usb_class_hid *hid = usb2hiddata(dev);
 	struct usb_hid_indev *hindev;
+	int ret;
 
-	usb_dev_use_inc(dev);
+	/* FIXME */
+	/* usb_dev_use_inc(dev); */
 
 	hindev = pool_alloc(&usb_hid_indevs);
 	if (!hindev) {
+		log_error("alloc failed");
 		return -ENOMEM;
 	}
 
@@ -126,5 +113,11 @@ int usb_hid_found(struct usb_dev *dev) {
 
 	usb_hid_indev_init(&hindev->input_dev);
 
-	return input_dev_register(&hindev->input_dev);
+	ret = input_dev_register(&hindev->input_dev);
+	if (!ret) {
+		log_error("input device registration failed");
+		return ret;
+	}
+
+	return 0;
 }

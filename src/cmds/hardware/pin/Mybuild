@@ -6,14 +6,17 @@ package embox.cmd.hardware
 	NAME
 		pin  -  Control pin voltage on board
 	SYNOPSIS
-		pin [pin_name] [OPTIONS]
+		pin <gpio> <pin> <state>
 	DESCRIPTION
-	OPTIONS
-		set	-- set '1'
-		reset	-- set '0'
-		toggle	-- invert
+	<state> must be one of:
+		get    -- Get value of pin 
+		set    -- Up pin 
+		reset  -- Down pin 
+		unset  -- Down pin 
+		toggle -- Reverts pin 
+		blink  -- Toggle pin every second
 	AUTHORS
-			Denis Deryugin <deryugin.denis@gmail.com>
+		Denis Deryugin <deryugin.denis@gmail.com>
 	''')
 
 @BuildDepends(third_party.bsp.stmf4cube.core)
@@ -22,5 +25,5 @@ module pin {
 
 	depends embox.compat.libc.stdio.printf
 	depends embox.compat.posix.util.getopt
-	depends embox.driver.gpio.api
+	depends embox.driver.gpio.core
 }

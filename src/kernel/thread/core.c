@@ -23,6 +23,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
+#include <inttypes.h>
 
 #include <embox/unit.h>
 
@@ -69,7 +70,7 @@ static void _NORETURN thread_trampoline(void) {
 	struct thread *current = thread_self();
 	void *res;
 
-	assertf(!critical_allows(CRITICAL_SCHED_LOCK), "0x%x", (uint32_t)__critical_count);
+	assertf(!critical_allows(CRITICAL_SCHED_LOCK), "0x%" PRIx32 "", (uint32_t)__critical_count);
 
 	thread_ack_switched();
 
@@ -222,8 +223,14 @@ void thread_init(struct thread *t, int priority,
 	 * the end
 	 * +++++++++++++++ bottom (t->stack - allocated memory for the stack)
 	 */
+#ifndef CONTEXT_USE_STACK_SIZE
 	context_init(&t->context, CONTEXT_PRIVELEGED | CONTEXT_IRQDISABLE,
 			thread_trampoline, thread_stack_get(t) + thread_stack_get_size(t));
+#else
+	context_init(&t->context, CONTEXT_PRIVELEGED | CONTEXT_IRQDISABLE,
+			thread_trampoline, thread_stack_get(t) + thread_stack_get_size(t),
+			thread_stack_get_size(t));
+#endif
 
 	sigstate_init(&t->sigstate);
 

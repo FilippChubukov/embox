@@ -1,21 +1,20 @@
 /**
- * @file perm_stub.c
+ * @file
  * @brief
  * @author Denis Deryugin <deryugin.denis@gmail.com>
  * @version 0.1
  * @date 2015-09-28
  */
 
-#include <fs/node.h>
-#include <fs/path.h>
+#include <fs/perm.h>
 
 /* This is stubs to make system compile w/o old vfs */
 
-int fs_perm_mask(struct node *node) {
+int fs_perm_mask(struct inode *node) {
 	return 0777;
 }
 
-int fs_perm_check(struct node *node, int fd_flags) {
+int fs_perm_check(struct inode *node, int fd_flags) {
 	return 0;
 }
 

@@ -14,6 +14,8 @@ module All {
 }
 
 static module getopt {
+	@IncludeExport(path="util")
+	source "getopt.h"
 	source "getopt.c"
 	source "getopt_long.c"
 
@@ -21,8 +23,6 @@ static module getopt {
 }
 
 static module utsname {
-	/* FIXME static release version 0.3.3 */
-	option string release="0.3.3"
 	option string system="Embox"
 	option string hostname="localhost"
 	source "utsname.c"

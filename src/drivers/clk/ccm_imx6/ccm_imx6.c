@@ -17,6 +17,7 @@
 #include <framework/mod/options.h>
 
 #define CCM_BASE           OPTION_GET(NUMBER, base_addr)
+#define CCM_ANALOG_BASE    OPTION_GET(NUMBER, analog_addr)
 
 #define MXC_CCM_CCR         (CCM_BASE + 0x00)
 #define MXC_CCM_CCDR        (CCM_BASE + 0x04)
@@ -101,14 +102,18 @@ struct clk {
 static const struct clk clks_repo[] = {
 	{ MXC_CCM_CCGR0, 3 << 24, "dcic1" },
 	{ MXC_CCM_CCGR0, 3 << 26, "dcic2" },
+	{ MXC_CCM_CCGR1, 3 << 0,  "ecspi1" },
+	{ MXC_CCM_CCGR1, 3 << 2,  "ecspi2" },
+	{ MXC_CCM_CCGR1, 3 << 4,  "ecspi3" },
+	{ MXC_CCM_CCGR1, 3 << 6,  "ecspi4" },
 	{ MXC_CCM_CCGR1, 3 << 24, "gpu2d" },
 	{ MXC_CCM_CCGR1, 3 << 26, "gpu3d" },
 	{ MXC_CCM_CCGR2, 1,       "iahb" },
 	{ MXC_CCM_CCGR2, 3 << 4,  "isfr" },
 	{ MXC_CCM_CCGR2, 0x33,    "hdmi" },
-	{ MXC_CCM_CCGR2, 1 << 3,  "i2c1" },
-	{ MXC_CCM_CCGR2, 1 << 4,  "i2c2" },
-	{ MXC_CCM_CCGR2, 1 << 5,  "i2c3" },
+	{ MXC_CCM_CCGR2, 3 << 6,  "i2c1" },
+	{ MXC_CCM_CCGR2, 3 << 8,  "i2c2" },
+	{ MXC_CCM_CCGR2, 3 << 10, "i2c3" },
 	{ MXC_CCM_CCGR3, 3 << 0,  "ipu1" },
 	{ MXC_CCM_CCGR3, 3 << 2,  "ipu1_di0" },
 	{ MXC_CCM_CCGR3, 3 << 4,  "ipu1_di1" },
@@ -118,7 +123,12 @@ static const struct clk clks_repo[] = {
 	{ MXC_CCM_CCGR3, 3 << 12, "ldb_di0" },
 	{ MXC_CCM_CCGR3, 3 << 14, "ldb_di1" },
 	{ MXC_CCM_CCGR3, 3 << 30, "openvg" },
+	{ MXC_CCM_CCGR4, 3 << 2,  "usdhc1" },
+	{ MXC_CCM_CCGR4, 3 << 4,  "usdhc2" },
+	{ MXC_CCM_CCGR4, 3 << 6,  "usdhc3" },
+	{ MXC_CCM_CCGR4, 3 << 8,  "usdhc4" },
 	{ MXC_CCM_CCGR6, 3 << 14, "vpu" },
+	{ MXC_CCM_CCGR6, 3 <<  0, "usboh3" },
 };
 
 int clk_enable(char *clk_name) {
@@ -176,45 +186,53 @@ void clk_reg_dump(void) {
 	log_debug("MXC_CCM_CCGR6 =0x%08x", REG32_LOAD(MXC_CCM_CCGR6));
 	log_debug("================= REGISTER DUMP END ===================");
 
-
 	for (int i = 0; i < 0x88 / 4 / 4; i++) {
 		log_debug("0x%08x 0x%08x 0x%08x 0x%08x",
 				REG32_LOAD(CCM_BASE + i * 4 * 4),
 				REG32_LOAD(CCM_BASE + i * 4 * 4 + 4),
 				REG32_LOAD(CCM_BASE + i * 4 * 4 + 8),
 				REG32_LOAD(CCM_BASE + i * 4 * 4 + 12));
-
-	}
-
-	log_debug("");
-	for (int i = 0x20C8000; i <= 0x20C817C; i+=4) {
-		log_debug("%p =0x%08x", i, REG32_LOAD(i));
-	}
-
-
-
-
-	static uint32_t vals[] = {
-		0x040110ff, 0x00000000, 0x00000038, 0x00000100,
-		0x00000000, 0x00018d00, 0x00010204, 0x0090a800,
-		0x02a12f06, 0x00490b00, 0x0ec102c1, 0x007312c1,
-		0x33e71f92, 0x00012093, 0x00012090, 0x00010841,
-		0x00010241, 0x00000000, 0x00000000, 0x00000003,
-		0x00000000, 0x00000078, 0x041a0000, 0xffffffff,
-		0x000e0101, 0x0000fe62, 0x0040000f, 0x00300000,
-		0x01ff0000, 0x3770300f, 0x000cf303, 0x00000003,
-	};
-	return;
-	for (int i = 0; i < 0x88 / 4; i++) {
-		if (i != 0x7c / 4)
-		REG32_STORE(CCM_BASE + i * 4, vals[i]);
-		log_debug("setup 0x%x\n", i * 4);
 	}
 }
 
-static struct periph_memory_desc ccm_mem = {
-	.start = CCM_BASE,
-	.len   = 0x100,
-};
+PERIPH_MEMORY_DEFINE(ccm, CCM_BASE, 0x100);
 
-PERIPH_MEMORY_DEFINE(ccm_mem);
+#define CCM_ANALOG_PLL_USB1              (CCM_ANALOG_BASE + 0x10)
+#define CCM_ANALOG_PLL_USB1_SET          (CCM_ANALOG_BASE + 0x14)
+#define CCM_ANALOG_PLL_USB1_CLR          (CCM_ANALOG_BASE + 0x18)
+
+#define CCM_ANALOG_PLL_USB2              (CCM_ANALOG_BASE + 0x20)
+#define CCM_ANALOG_PLL_USB2_SET          (CCM_ANALOG_BASE + 0x24)
+#define CCM_ANALOG_PLL_USB2_CLR          (CCM_ANALOG_BASE + 0x28)
+
+# define CCM_ANALOG_PLL_USB_BYPASS      (1 << 16)
+# define CCM_ANALOG_PLL_USB_ENABLE      (1 << 13)
+# define CCM_ANALOG_PLL_USB_POWER       (1 << 12)
+# define CCM_ANALOG_PLL_USB_EN_USB_CLKS (1 <<  6)
+
+void ccm_analog_usb_init(int port) {
+	switch (port) {
+	case 0:
+		REG32_STORE(CCM_ANALOG_PLL_USB1_CLR,
+				CCM_ANALOG_PLL_USB_BYPASS);
+
+		REG32_STORE(CCM_ANALOG_PLL_USB1_SET,
+				CCM_ANALOG_PLL_USB_ENABLE |
+				CCM_ANALOG_PLL_USB_POWER |
+				CCM_ANALOG_PLL_USB_EN_USB_CLKS);
+		break;
+	case 1:
+		REG32_STORE(CCM_ANALOG_PLL_USB2_CLR,
+				CCM_ANALOG_PLL_USB_BYPASS);
+
+		REG32_STORE(CCM_ANALOG_PLL_USB2_SET,
+				CCM_ANALOG_PLL_USB_ENABLE |
+				CCM_ANALOG_PLL_USB_POWER |
+				CCM_ANALOG_PLL_USB_EN_USB_CLKS);
+		break;
+	default:
+		log_error("Wrong port %d", port);
+	}
+}
+
+PERIPH_MEMORY_DEFINE(ccm_analog, CCM_ANALOG_BASE, 0x180);

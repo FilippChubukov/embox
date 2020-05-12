@@ -22,8 +22,8 @@
 /* Interrupt vector for timer (TMR1) */
 #define CLOCK_IRQ	5
 
-/* The clock rate per second - 1Mhz */
-#define CLOCK_RATE	10000000L
+/* The clock rate per second */
+#define CLOCK_RATE	48054841L
 
 /* The initial counter value */
 #define TIMER_COUNT	(CLOCK_RATE / HZ)
@@ -94,9 +94,4 @@ static int integratorcp_init(void) {
 			"integratorcp_clk");
 }
 
-static struct periph_memory_desc integratorcp_clock_mem = {
-	.start = TIMER_BASE,
-	.len   = 0x30,
-};
-
-PERIPH_MEMORY_DEFINE(integratorcp_clock_mem);
+PERIPH_MEMORY_DEFINE(integratorcp_clock, TIMER_BASE, 0x30);

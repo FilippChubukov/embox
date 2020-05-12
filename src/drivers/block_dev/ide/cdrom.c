@@ -24,10 +24,10 @@
 
 #define CD_WAIT_US 3000
 
-#define MAX_DEV_QUANTITY OPTION_GET(NUMBER,dev_quantity)
-INDEX_DEF(idecd_idx, 0, MAX_DEV_QUANTITY);
+#define MAX_IDE_QUANTITY OPTION_GET(NUMBER,dev_quantity)
+INDEX_DEF(idecd_idx, 0, MAX_IDE_QUANTITY);
 
-static block_dev_driver_t idecd_pio_driver;
+static const struct block_dev_driver idecd_pio_driver;
 
 static int atapi_packet_read(hd_t *hd, unsigned char *pkt,
 		int pktlen, char *buffer, size_t bufsize) {
@@ -234,7 +234,7 @@ static int idecd_init (void *args) {
 	return 0;
 }
 
-static block_dev_driver_t idecd_pio_driver = {
+static const struct block_dev_driver idecd_pio_driver = {
 	"idecd_drv",
 	cd_ioctl,
 	cd_read,

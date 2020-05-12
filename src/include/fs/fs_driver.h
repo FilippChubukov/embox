@@ -8,33 +8,33 @@
 #ifndef FS_DRV_H_
 #define FS_DRV_H_
 
-
-#include <util/array.h>
-#include <stddef.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <sys/types.h>
+#include <util/array.h>
 
-struct node;
+struct inode;
+struct block_dev;
+struct super_block;
 
 struct fsop_desc {
-	int (*init)(void *par);
-	int (*format)(void *par);
-	int (*mount)(void *dev_node, void *dir_node);
-	int (*create_node)(struct node *parent_node, struct node *new_node);
-	int (*delete_node)(struct node *node);
+	int (*format)(struct block_dev *bdev, void *priv);
+	int (*mount)(struct super_block *sb, struct inode *dest);
+	int (*create_node)(struct inode *parent_node, struct inode *new_node);
+	int (*delete_node)(struct inode *node);
 
 	/* TODO: consider following to accept nas * as first arg (Anton Kozlov) */
-	int (*getxattr)(struct node *node, const char *name,
+	int (*getxattr)(struct inode *node, const char *name,
 			char *value, size_t len);
-	int (*setxattr)(struct node *node, const char *name,
+	int (*setxattr)(struct inode *node, const char *name,
 			const char *value, size_t len, int flags);
-	int (*listxattr)(struct node *node, char *list, size_t len);
+	int (*listxattr)(struct inode *node, char *list, size_t len);
 
-	int (*truncate)(struct node *node, off_t length);
-	int (*umount)(void *dir_node);
+	int (*truncate)(struct inode *node, off_t length);
+	int (*umount_entry)(struct inode *node);
 };
 
-struct kfile_operations;
+struct file_operations;
 
 /**
  * Structure of file system driver.
@@ -42,41 +42,19 @@ struct kfile_operations;
  * our system.
  */
 struct fs_driver {
-	const char                    *name;
-	bool		mount_dev_by_string;
-	const struct kfile_operations *file_op;
-	const struct fsop_desc        *fsop;
+	const char                   *name;
+	int (*fill_sb)(struct super_block *sb, const char *source);
+	int (*clean_sb)(struct super_block *sb);
+	const struct file_operations *file_op;
+	const struct fsop_desc       *fsop;
 };
 
 #define DECLARE_FILE_SYSTEM_DRIVER(fs_driver_)      \
 	ARRAY_SPREAD_DECLARE(const struct fs_driver *const, \
-			__fs_drivers_registry);                \
-	ARRAY_SPREAD_ADD(__fs_drivers_registry, \
+			fs_drivers_registry);                \
+	ARRAY_SPREAD_ADD(fs_drivers_registry, \
 			&fs_driver_)
 
-/**
- * allocate structure for fs_driver structure
- * @return pointer to allocated memory
- */
-extern struct fs_driver *alloc_fs_drivers(void);
-
-/**
- * free early allocated driver with function alloc_fs_drivers
- */
-extern void free_fs_drivers(struct fs_driver *);
-
-extern struct fs_driver *fs_driver_find_drv(const char *name);
-
-/**
- * register a new filesystem driver
- * @param fs the file system structure
- */
-extern int fs_driver_register_drv(struct fs_driver *);
-
-/**
- * unregister a file system driver
- * @param fs filesystem to unregister
- */
-extern int fs_driver_unregister_drv(struct fs_driver *);
+extern const struct fs_driver *fs_driver_find(const char *name);
 
 #endif /* FS_DRV_H_ */

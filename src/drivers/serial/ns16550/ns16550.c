@@ -17,6 +17,8 @@
 #include <drivers/serial/uart_device.h>
 #include <drivers/serial/diag_serial.h>
 
+#define REG_WIDTH    OPTION_GET(NUMBER,reg_width)
+
 #define COM0_IRQ_NUM OPTION_GET(NUMBER,irq_num)
 
 #define UART_LSR_DR     0x01            /* Data ready */
@@ -25,11 +27,12 @@
 
 #define UART_REG(x)                                                     \
         unsigned char x;                                                \
-        unsigned char postpad_##x[3];
+        unsigned char postpad_##x[REG_WIDTH - 1];
 
 struct com {
         UART_REG(rbr);          /* 0 */
         UART_REG(ier);          /* 1 */
+#define NS16550_IER_RX_IRQ	(1 << 0)
         UART_REG(fcr);          /* 2 */
         UART_REG(lcr);          /* 3 */
         UART_REG(mcr);          /* 4 */
@@ -57,6 +60,17 @@ struct com {
 EMBOX_UNIT_INIT(ns16550_init);
 
 static int ns16550_setup(struct uart *dev, const struct uart_params *params) {
+	COM3->ier |= NS16550_IER_RX_IRQ;
+	return 0;
+}
+
+static int ns16550_irq_en(struct uart *dev, const struct uart_params *params) {
+	COM3->ier |= NS16550_IER_RX_IRQ;
+	return 0;
+}
+
+static int ns16550_irq_dis(struct uart *dev, const struct uart_params *params) {
+	COM3->ier &= ~NS16550_IER_RX_IRQ;
 	return 0;
 }
 
@@ -78,15 +92,17 @@ static int ns16550_has_symbol(struct uart *dev) {
 }
 
 
-static const struct uart_ops i8250_uart_ops = {
+static const struct uart_ops ns16550_uart_ops = {
 		.uart_getc = ns16550_getc,
 		.uart_putc = ns16550_putc,
 		.uart_hasrx = ns16550_has_symbol,
 		.uart_setup = ns16550_setup,
+		.uart_irq_en = ns16550_irq_en,
+		.uart_irq_dis = ns16550_irq_dis,
 };
 
 static struct uart uart0 = {
-		.uart_ops = &i8250_uart_ops,
+		.uart_ops = &ns16550_uart_ops,
 		.irq_num = COM0_IRQ_NUM,
 		.base_addr = COM_BASE,
 };
@@ -96,7 +112,7 @@ static const struct uart_params uart_defparams = {
 		.parity = 0,
 		.n_stop = 1,
 		.n_bits = 8,
-		.irq = false,
+		.irq = true,
 };
 
 static const struct uart_params uart_diag_params = {
@@ -107,21 +123,10 @@ static const struct uart_params uart_diag_params = {
 		.irq = false,
 };
 
-const struct uart_diag DIAG_IMPL_NAME(__EMBUILD_MOD__) = {
-		.diag = {
-			.ops = &uart_diag_ops,
-		},
-		.uart = &uart0,
-		.params = &uart_diag_params,
-};
-
-static struct periph_memory_desc ns16550_mem = {
-	.start = COM_BASE,
-	.len   = 0x1000,
-};
+DIAG_SERIAL_DEF(&uart0, &uart_diag_params);
 
 static int ns16550_init(void) {
 	return uart_register(&uart0, &uart_defparams);
 }
 
-PERIPH_MEMORY_DEFINE(ns16550_mem);
+PERIPH_MEMORY_DEFINE(ns16550, COM_BASE, 0x1000);

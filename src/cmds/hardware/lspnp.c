@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdio.h>
+#include <inttypes.h>
 
 #include <drivers/amba_pnp.h>
 #include <drivers/amba_registry.h>
@@ -65,7 +66,7 @@ static inline void show_bars_type(amba_bar_info_t *bar) {
 static inline void show_bar_info(amba_bar_info_t *bar) {
 	if (bar->used) {
 		show_bars_type(bar);
-		printf("%X\n", bar->start);
+		printf("%"PRIX32"\n", bar->start);
 	}
 }
 
@@ -285,7 +286,6 @@ int main(int argc, char **argv) {
 	int dev_number = -1;
 	func_show_bus_t show_func = show_all;
 	int opt;
-	getopt_init();
 	while (-1 != (opt = getopt(argc, argv, "n:b:h"))) {
 		switch(opt) {
 		case 'h':

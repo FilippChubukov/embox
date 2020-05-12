@@ -30,6 +30,8 @@ LIBGCC_FINDER=$(CC) $(CFLAGS)
 endif
 CPP     ?= $(CC) -E
 
+CPPFLAGS += -D__EMBOX_VERSION__=\"$(EMBOX_VERSION)\"
+
 comma_sep_list = $(subst $(\s),$(,),$(strip $1))
 
 COVERAGE_CFLAGS ?= -finstrument-functions \
@@ -220,6 +222,7 @@ override CXXFLAGS += -I$(abspath $(SRC_DIR)/compat/cxx/include)
 #	C++ has build-in type bool
 override CXXFLAGS += -DSTDBOOL_H_
 override CXXFLAGS += $(cxxflags)
+override CXXFLAGS += -std=gnu++11
 
 # Compiler flags
 cflags := $(CFLAGS)

@@ -59,10 +59,6 @@ enum pix_fmt {
 extern int pix_fmt_has_alpha(enum pix_fmt fmt);
 extern int pix_fmt_bpp(enum pix_fmt fmt);
 extern int pix_fmt_chan_bits(enum pix_fmt fmt, enum pix_chan chan);
-extern int pix_fmt_chan_get_val(enum pix_fmt fmt, enum pix_chan chan,
-		void *data);
-extern void pix_fmt_chan_set_val(enum pix_fmt fmt, enum pix_chan chan,
-		void *data, int val);
 extern int pix_fmt_convert(void *src, void *dst, int n,
 		enum pix_fmt in, enum pix_fmt out);
 
@@ -163,6 +159,7 @@ struct fb_ops {
 	void (*fb_fillrect)(struct fb_info *info, const struct fb_fillrect *rect);
 	void (*fb_imageblit)(struct fb_info *info, const struct fb_image *image);
 	void (*fb_cursor)(struct fb_info *info, const struct fb_cursor *cursor);
+	int (*fb_set_base)(struct fb_info *info, void *new_base);
 };
 
 struct fb_info {
@@ -193,7 +190,7 @@ extern void fb_imageblit(struct fb_info *info, const struct fb_image *image);
 extern void fb_cursor(struct fb_info *info, const struct fb_cursor *cursor);
 
 
-extern int fb_devfs_create(const struct fb_ops *ops, char *map_base, size_t map_size);
+extern int fb_devfs_create(struct fb_info *fbi, char *map_base, size_t map_size);
 
 __END_DECLS
 

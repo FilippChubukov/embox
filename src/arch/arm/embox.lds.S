@@ -7,22 +7,20 @@ OUTPUT_ARCH(arm)
 ENTRY(start)
 
 MEMORY {
-	MEMORY_REGION(RAM)
-	MEMORY_REGION(ROM)
-#if HAS_MEMORY_REGION(SRAM_CCM)
-	MEMORY_REGION(SRAM_CCM)
-#endif
+	#include <regions.lds.h>
 }
 
 _ram_base = ORIGIN(RAM);
 _ram_size = LENGTH(RAM);
-
 
 SECTIONS {
 	.text : {
 		*(.trap_table)
 		*(.monitor_trap_table)
 		STATIC_IRQ_TABLE
+
+		*(.da14680_quirk)
+		*(.da1469x_quirk)
 
 		*(.flash)
 
@@ -33,8 +31,12 @@ SECTIONS {
 
 	/* XXX symbols __exidx_start/end are required by libgcc.a --Alexander */
 	.ARM.exidx : {
+		__exidx_start = .;
 		*(.ARM.exidx*)
+		__exidx_end = .;
 	} SECTION_REGION(text)
-	__exidx_start = ADDR(.ARM.exidx);
-	__exidx_end = __exidx_start + SIZEOF(.ARM.exidx);
+
+	.ARM.extab : {
+		*(.ARM.extab*)
+	} SECTION_REGION(text)
 }

@@ -5,9 +5,7 @@ OUTPUT_ARCH(e3s)
 ENTRY(_start)
 
 MEMORY {
-	MEMORY_REGION(RAM)
-	MEMORY_REGION(ROM)
-	MEMORY_REGION(BOOTINFO)
+	#include <regions.lds.h>
 }
 
 _ram_base = ORIGIN(RAM);
@@ -21,13 +19,10 @@ SECTIONS {
 		*(.x86_boot)
 		. = _bootinfo_start + 0x10000;
 		_bootinfo_end = .;
-	} SECTION_REGION(bootinfo)
+	}
 
 	.text : {
 		_start = .;
-		/* 0x01000000 */
-		*(.e2k_entry);
-
 		 _t_entry = .;
 		/* Interrupt handler */
 		*(.ttable_entry0)
@@ -40,6 +35,9 @@ SECTIONS {
 		. = _t_entry + 0x1800;
 		_t_entry_end = .;
 
+		*(.e2k_entry)
+		*(.cpu_idle)
+
 		/* text */
-	}
+	} SECTION_REGION(text)
 }

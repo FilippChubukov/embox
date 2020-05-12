@@ -14,9 +14,9 @@
 #include <xen/io/console.h>
 #include <xen_hypercall-x86_32.h>
 
-#include <xen/sched.h>
-#include <xen_barrier.h>
-#include <xen/event.h>
+#include <barrier.h>
+
+#include <assert.h>
 
 static evtchn_port_t console_evt;
 extern char _text_vma;
@@ -58,7 +58,24 @@ static void diag_xen_putc(const struct diag *diag, char ch) {
 	HYPERVISOR_event_channel_op(EVTCHNOP_send, &event);
 }
 
-DIAG_OPS_DECLARE(
+static char diag_xen_getc(const struct diag *diag) {
+	assert(console->in_prod != console->in_cons);
+
+	int ring_index = MASK_XENCONS_IDX(console->in_cons, console->in);
+	char ch = console->in[ring_index];
+	rmb();
+	console->in_cons++;
+
+	return ch;
+}
+
+static int diag_xen_kbhit(const struct diag *diag) {
+	return console->in_prod != console->in_cons;
+}
+
+DIAG_OPS_DEF(
 	.init = diag_xen_init,
 	.putc = diag_xen_putc,
+	.getc = diag_xen_getc,
+	.kbhit = diag_xen_kbhit,
 );

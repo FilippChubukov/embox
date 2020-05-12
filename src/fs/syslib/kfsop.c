@@ -13,18 +13,21 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <sys/stat.h>
-
+#include <utime.h>
 #include <sys/file.h>
 
-#include <fs/vfs.h>
-#include <fs/mount.h>
-#include <fs/hlpr_path.h>
-#include <fs/fs_driver.h>
-#include <fs/kfsop.h>
-#include <fs/perm.h>
-#include <fs/file_desc.h>
+#include <drivers/device.h>
 #include <fs/dcache.h>
-//#include <fs/file_operation.h>
+#include <fs/dir_context.h>
+#include <fs/file_desc.h>
+#include <fs/fs_driver.h>
+#include <fs/hlpr_path.h>
+#include <fs/inode.h>
+#include <fs/inode_operation.h>
+#include <fs/kfsop.h>
+#include <fs/mount.h>
+#include <fs/perm.h>
+#include <fs/vfs.h>
 
 #include <security/security.h>
 
@@ -35,11 +38,11 @@
 #include <mem/misc/pool.h>
 
 #define MAX_FLOCK_QUANTITY OPTION_GET(NUMBER, flock_quantity)
-POOL_DEF(flock_pool, flock_shared_t, MAX_FLOCK_QUANTITY);
+POOL_DEF(flock_pool, struct flock_shared, MAX_FLOCK_QUANTITY);
 
 static int create_new_node(struct path *parent, const char *name, mode_t mode) {
 	struct path node;
-	struct fs_driver *drv;
+	const struct fs_driver *drv;
 	int retval = 0;
 
 	if(NULL == parent->node->nas->fs) {
@@ -51,17 +54,21 @@ static int create_new_node(struct path *parent, const char *name, mode_t mode) {
 	}
 
 	/* check drv of parents */
-	drv = parent->node->nas->fs->drv;
-	if (!drv || !drv->fsop->create_node) {
-		retval = -ENOSYS;
-		goto out;
-	}
+	drv = parent->node->nas->fs->fs_drv;
 
-	retval = drv->fsop->create_node(parent->node, node.node);
-	if (retval) {
-		goto out;
-	}
+	if ((mode & VFS_DIR_VIRTUAL) && S_ISDIR(mode)) {
+		node.node->nas->fs = parent->node->nas->fs;
+	} else {
+		if (!drv || !drv->fsop->create_node) {
+			retval = -ENOSYS;
+			goto out;
+		}
 
+		retval = drv->fsop->create_node(parent->node, node.node);
+		if (retval) {
+			goto out;
+		}
+	}
 	/* XXX it's here and not in vfs since vfs node associated with drive after
  	 * creating. security may call driver dependent features, like setting
 	 * xattr
@@ -110,7 +117,7 @@ int kmkdir(const char *pathname, mode_t mode) {
 }
 
 int kcreat(struct path *dir_path, const char *path, mode_t mode, struct path *child) {
-	struct fs_driver *drv;
+	const struct fs_driver *drv;
 	int ret;
 
 	assert(dir_path->node);
@@ -151,7 +158,7 @@ int kcreat(struct path *dir_path, const char *path, mode_t mode, struct path *ch
 	}
 
 	/* check drv of parents */
-	drv = dir_path->node->nas->fs->drv;
+	drv = dir_path->node->nas->fs->fs_drv;
 	if (!drv || !drv->fsop->create_node) {
 		SET_ERRNO(EBADF);
 		vfs_del_leaf(child->node);
@@ -176,7 +183,7 @@ int kcreat(struct path *dir_path, const char *path, mode_t mode, struct path *ch
 int kremove(const char *pathname) {
 	struct path node;
 	struct nas *nas;
-	struct fs_driver *drv;
+	const struct fs_driver *drv;
 	int res;
 
 	if (0 != (res = fs_perm_lookup(pathname, NULL, &node))) {
@@ -185,7 +192,7 @@ int kremove(const char *pathname) {
 	}
 
 	nas = node.node->nas;
-	drv = nas->fs->drv;
+	drv = nas->fs->fs_drv;
 	if (NULL == drv->fsop->delete_node) {
 		errno = EPERM;
 		return -1;
@@ -201,7 +208,7 @@ int kremove(const char *pathname) {
 
 int kunlink(const char *pathname) {
 	struct path node, parent;
-	struct fs_driver *drv;
+	const struct fs_driver *drv;
 	int res;
 
 	if (0 != (res = fs_perm_lookup(pathname, NULL, &node))) {
@@ -220,7 +227,7 @@ int kunlink(const char *pathname) {
 		return -1;
 	}
 
-	drv = node.node->nas->fs->drv;
+	drv = node.node->nas->fs->fs_drv;
 
 	if (NULL == drv->fsop->delete_node) {
 		errno = EPERM;
@@ -232,15 +239,15 @@ int kunlink(const char *pathname) {
 		return -1;
 	}
 
-	/*vfs_del_leaf(node);*/
+	vfs_del_leaf(node.node);
 
 	return 0;
 
 }
 
 int krmdir(const char *pathname) {
-	struct path node, parent;
-	struct fs_driver *drv;
+	struct path node, parent, child;
+	const struct fs_driver *drv;
 	int res;
 
 	if (0 != (res = fs_perm_lookup(pathname, NULL, &node))) {
@@ -253,12 +260,18 @@ int krmdir(const char *pathname) {
 		return -1;
 	}
 
+	/* Remove directory only if it's empty */
+	if (0 == vfs_get_child_next(&node, NULL, &child)) {
+		errno = ENOTEMPTY;
+		return -1;
+	}
+
 	vfs_get_parent(&node, &parent);
 	if (0 != (res = security_node_delete(parent.node, node.node))) {
 		return res;
 	}
 
-	drv = node.node->nas->fs->drv;
+	drv = node.node->nas->fs->fs_drv;
 
 	if (NULL == drv->fsop->delete_node) {
 		errno = EPERM;
@@ -272,13 +285,13 @@ int krmdir(const char *pathname) {
 
 	dcache_delete(getenv("PWD"), pathname);
 
-	/*vfs_del_leaf(node);*/
+	vfs_del_leaf(node.node);
 
 	return 0;
 
 }
 
-extern int kfile_fill_stat(struct node *node, struct stat *stat_buff);
+extern int kfile_fill_stat(struct inode *node, struct stat *stat_buff);
 int klstat(const char *path, struct stat *buf) {
 	struct path node;
 	int res;
@@ -293,13 +306,25 @@ int klstat(const char *path, struct stat *buf) {
 	return 0;
 }
 
-int kformat(const char *pathname, const char *fs_type) {
+int kutime(const char *path,const struct utimbuf *times) {
 	struct path node;
-	struct fs_driver *drv;
 	int res;
 
+	if (0 != (res = fs_perm_lookup(path, NULL, &node))) {
+		return res;
+	}
+
+	return kfile_change_stat(node.node, times);
+}
+
+int kformat(const char *pathname, const char *fs_type) {
+	struct path node;
+	const struct fs_driver *drv;
+	int res;
+	struct block_dev *bdev;
+
 	if (0 != fs_type) {
-		drv = fs_driver_find_drv((const char *) fs_type);
+		drv = fs_driver_find((const char *) fs_type);
 		if (NULL == drv) {
 			return -EINVAL;
 		}
@@ -321,7 +346,8 @@ int kformat(const char *pathname, const char *fs_type) {
 		return -1;
 	}
 
-	if (0 != (res = drv->fsop->format(node.node))) {
+	bdev = node.node->nas->fi->privdata;
+	if (0 != (res = drv->fsop->format(bdev, NULL))) {
 		errno = -res;
 		return -1;
 	}
@@ -329,66 +355,103 @@ int kformat(const char *pathname, const char *fs_type) {
 	return 0;
 }
 
-int kmount(const char *dev, const char *dir, const char *fs_type) {
-	struct path dev_node, dir_node, root_path;
-	struct fs_driver *drv;
+struct block_dev *bdev_by_path(const char *source) {
+	struct path dev_node;
+	const char *lastpath;
+	struct dev_module *devmod;
+
+	if (source == NULL) {
+		return NULL;
+	}
+
+	if (ENOERR != fs_perm_lookup(source, &lastpath, &dev_node)) {
+		return NULL;
+	}
+
+	if (ENOERR != fs_perm_check(dev_node.node, S_IROTH | S_IXOTH)) {
+		return NULL;
+	}
+
+	/* TODO: check if it's actually part of devfs? */
+	devmod = inode_priv(dev_node.node);
+
+	return devmod->dev_priv;
+}
+
+static int vfs_mount_walker(struct inode *dir) {
+	int res;
+	struct dir_ctx dir_context = { };
+
+	assert(dir);
+
+	do {
+		struct inode *node = inode_new(dir->i_sb);
+		if (NULL == node) {
+			return -ENOMEM;
+		}
+
+		assert(dir->i_ops);
+		res = dir->i_ops->iterate(node,
+				node->name,
+				dir,
+				&dir_context);
+
+		if (res == -1){
+			/* End of directory */
+			node_free(node);
+			return 0;
+		}
+
+		node->i_ops = dir->i_ops;
+
+		assert(node->nas);
+		node->nas->fs = node->i_sb = dir->nas->fs;
+
+		vfs_add_leaf(node, dir);
+
+		if (node_is_directory(node)) {
+			vfs_mount_walker(node);
+		}
+	} while (1);
+}
+
+int kmount(const char *source, const char *dest, const char *fs_type) {
+	struct path dir_node;
+	const struct fs_driver *drv;
+	struct super_block *sb;
 	const char *lastpath;
 	int res;
 
-	if (!fs_type) {
-		errno = EINVAL;
-		return -1;
+	if (NULL == (sb = super_block_alloc(fs_type, source))) {
+		return -ENOMEM;
 	}
 
-	drv = fs_driver_find_drv(fs_type);
-	if (!drv) {
-		errno = EINVAL;
-		return -1;
-	}
+	drv = sb->fs_drv;
 	if (!drv->fsop->mount) {
 		errno = ENOSYS;
 		return -1;
 	}
 
-	if (drv->mount_dev_by_string) {
-		dev_node.node = (node_t *) dev;
-	} else {
-		if (ENOERR != (res = fs_perm_lookup(dev, &lastpath, &dev_node))) {
-			errno = res == -ENOENT ? ENODEV : -res;
-			return -1;
-		}
-
-		if (ENOERR != (res = fs_perm_check(dev_node.node, S_IROTH | S_IXOTH))) {
-			errno = EACCES;
-			return -1;
-		}
-	}
-
-	if (ENOERR != (res = fs_perm_lookup(dir, &lastpath, &dir_node))) {
+	if (ENOERR != (res = fs_perm_lookup(dest, &lastpath, &dir_node))) {
 		errno = -res;
 		return -1;
 	}
 
-	if (ENOERR != (res = security_mount(dev_node.node, dir_node.node))) {
-		errno = -res;
-		return -1;
-	}
-
-	if (0 == strcmp(dir, "/")) {
-		root_path.node = dir_node.node;
-	} else {
-		root_path.node = vfs_create_root();
-	}
-
-	if (ENOERR != (res = drv->fsop->mount(dev_node.node, root_path.node))) {
+	if (ENOERR != (res = drv->fsop->mount(sb, sb->sb_root))) {
 		//todo free root
 		errno = -res;
 		return -1;
-
 	}
 
-	if (NULL == mount_table_add(&dir_node, root_path.node, dev)) {
-		drv->fsop->umount(&dir_node);
+	if (sb->sb_root->i_ops && sb->sb_root->i_ops->iterate) {
+		/* If FS provides iterate handler, then we assume
+		 * that we should use it to actually mount all these
+		 * files */
+		vfs_mount_walker(sb->sb_root);
+	}
+
+	if (NULL == mount_table_add(&dir_node, sb->sb_root, source)) {
+		super_block_free(sb);
 		//todo free root
 		errno = -res;
 		return -1;
@@ -455,7 +518,7 @@ int krename(const char *oldpath, const char *newpath) {
 	char *name, *newpathbuf = NULL;
 	char *newpatharg, *oldpatharg;
 	struct path oldnode, newnode;
-	struct node *diritem;
+	struct inode *diritem;
 	/* We use custom tree traversal while I can't
 	 * get success with tree_foreach_children */
 	struct tree_link *link, *end_link;
@@ -519,7 +582,7 @@ int krename(const char *oldpath, const char *newpath) {
 
 	/* If oldpath is directory, copy it recursively */
 	if (node_is_directory(oldnode.node)) {
-		rc = kmkdir(newpath, oldnode.node->mode);
+		rc = kmkdir(newpath, oldnode.node->i_mode);
 		if (-1 == rc) {
 			return -1;
 		}
@@ -589,9 +652,27 @@ int krename(const char *oldpath, const char *newpath) {
 	return ENOERR;
 }
 
+static int umount_walker(struct inode *node) {
+	struct inode *child;
+
+	if (node_is_directory(node)) {
+		while (NULL != (child = vfs_subtree_get_child_next(node, NULL))) {
+			umount_walker(child);
+		}
+	}
+
+	if (node->i_sb->fs_drv->fsop->umount_entry) {
+		node->i_sb->fs_drv->fsop->umount_entry(node);
+	}
+
+	vfs_del_leaf(node);
+
+	return 0;
+}
+
 int kumount(const char *dir) {
 	struct path dir_node, node;
-	struct fs_driver *drv;
+	const struct fs_driver *drv;
 	const char *lastpath;
 	int res;
 
@@ -614,21 +695,25 @@ int kumount(const char *dir) {
 	if_mounted_follow_down(&dir_node);
 	node = dir_node;
 
-	drv = dir_node.node->nas->fs->drv;
+	drv = dir_node.node->nas->fs->fs_drv;
 
 	if (!drv) {
 		return -EINVAL;
-	}
-	if (!drv->fsop->umount) {
-		return  -ENOSYS;
 	}
 
 	if (0 != (res = security_umount(dir_node.node))) {
 		return res;
 	}
 
-	if(0 != (res = drv->fsop->umount(dir_node.node))) {
+	if (0 != (res = umount_walker(dir_node.node))) {
 		return res;
+	}
+
+	dir_node.node->i_sb->sb_root = NULL;
+	super_block_free(dir_node.node->i_sb);
+
+	if (dir_node.node != vfs_get_root()) {
+		node_free(dir_node.node);
 	}
 
 	mount_table_del(node.mnt_desc);
@@ -642,8 +727,8 @@ int kumount(const char *dir) {
 	return 0;
 }
 
-static int flock_shared_get(flock_t *flock) {
-	flock_shared_t *shlock;
+static int flock_shared_get(struct node_flock *flock) {
+	struct flock_shared *shlock;
 	struct thread *current = thread_self();
 
 	shlock = pool_alloc(&flock_pool);
@@ -657,8 +742,8 @@ static int flock_shared_get(flock_t *flock) {
 	return -ENOERR;
 }
 
-static int flock_shared_put(flock_t *flock) {
-	flock_shared_t *shlock;
+static int flock_shared_put(struct node_flock *flock) {
+	struct flock_shared *shlock;
 	struct thread *current = thread_self();
 
 	dlist_foreach_entry(shlock, &flock->shlock_holders, flock_link) {
@@ -692,7 +777,7 @@ static inline void flock_exclusive_put(struct mutex *exlock) {
  */
 int kflock(int fd, int operation) {
 	int rc;
-	flock_t *flock;
+	struct node_flock *flock;
 	struct mutex *exlock;
 	spinlock_t *flock_guard;
 	long *shlock_count;
@@ -734,7 +819,7 @@ int kflock(int fd, int operation) {
 	/* - Find locks and other properties for provided file descriptor number
 	 * - fd is validated inside task_self_idx_get */
 	fdesc = file_desc_get(fd);
-	flock = &(fdesc)->node->flock;
+	flock = &(fdesc)->f_inode->flock;
 	exlock = &flock->exlock;
 	shlock_count = &flock->shlock_count;
 	flock_guard = &flock->flock_guard;

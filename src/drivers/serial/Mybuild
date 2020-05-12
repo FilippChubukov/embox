@@ -1,22 +1,9 @@
 package embox.driver.serial
 
-@DefaultImpl(core_old)
-abstract module core { }
-
-module uart_dev_dvfs extends core {
+@DefaultImpl(core_tty)
+abstract module core {
 	option number uart_max_n = 4
-
-	source "uart_dev_dvfs.c"
-
-	@IncludeExport(path="drivers/serial")
-	source "uart_device.h"
-
-	@NoRuntime depends embox.util.indexator
-	@NoRuntime depends embox.driver.tty.serial_dvfs
-}
-
-module core_old extends core {
-	option number uart_max_n = 4
+	option number log_level = 1
 
 	source "uart_dev.c"
 
@@ -24,19 +11,19 @@ module core_old extends core {
 	source "uart_device.h"
 
 	@NoRuntime depends embox.util.indexator
-	@NoRuntime depends embox.driver.tty.serial_oldfs
+	@NoRuntime depends embox.util.dlist
+	@NoRuntime depends embox.util.log
+	@NoRuntime depends embox.mem.pool
+}
+
+module core_tty extends core {
+	@NoRuntime depends embox.driver.tty.serial
+	@NoRuntime depends embox.driver.common
 }
 
 module core_notty extends core {
-	option number uart_max_n = 4
-
-	source "uart_dev.c"
-
-	@IncludeExport(path="drivers/serial")
-	source "uart_device.h"
-
-	@NoRuntime depends embox.util.indexator
 	@NoRuntime depends embox.driver.tty.serial_stub
+	@NoRuntime depends embox.driver.common
 }
 
 module diag {
@@ -50,22 +37,6 @@ module at91_uart extends embox.driver.diag.diag_api {
 	option number baud_rate
 
 	source "at91_uart.c"
-}
-
-module raspi_uart extends embox.driver.diag.diag_api {
-	option number baud_rate=115200
-
-	source "raspi_uart.c"
-
-	depends core
-	depends diag
-}
-
-module xuartlite extends embox.driver.diag.diag_api {
-	source "xuartlite.c"
-
-	option number xuartlite_base
-	option number irq_num
 }
 
 module stm32_usart extends embox.driver.diag.diag_api {
@@ -114,4 +85,12 @@ module multiclet extends embox.driver.diag.diag_api {
 	source "multiclet_uart.c"
 
 	depends third_party.bsp.multiclet.core
+}
+
+module sifive_uart extends embox.driver.diag.diag_api {
+	option number base_addr
+	option number clock_freq
+	option number baud_rate
+
+	source "sifive_uart.c"
 }

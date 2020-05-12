@@ -140,9 +140,9 @@ static void parse_result(struct packet_in *rx_pack,
 					+ IP_HEADER_SIZE(emb_iph));
 		if ((to->sin_addr.s_addr != emb_iph->daddr)
 				|| (tx_pack->icmp.body.echo_req.id
-					!= emb_icmph->body[0].echo.id)
+					!= emb_icmph->body.echo.id)
 				|| (ntohs(tx_pack->icmp.body.echo_req.seq)
-					< ntohs(emb_icmph->body[0].echo.seq))) {
+					< ntohs(emb_icmph->body.echo.seq))) {
 			break;
 		}
 		dst_addr_str = inet_ntoa(*(struct in_addr *)&rx_pack->ip.hdr.saddr);
@@ -297,7 +297,6 @@ int main(int argc, char **argv) {
 	pinfo.timeout = DEFAULT_TIMEOUT;
 	pinfo.ttl = DEFAULT_TTL;
 
-	getopt_init();
 	/* while (-1 != (opt = getopt(argc, argv, "I:c:t:W:s:i:p:h"))) { */
 	/* Parse commandline options */
 	for (i_opt = 0; i_opt < argc - 1; i_opt++) {

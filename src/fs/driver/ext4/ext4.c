@@ -16,6 +16,7 @@
 
 #include <util/array.h>
 #include <util/err.h>
+#include <util/getopt.h>
 #include <embox/unit.h>
 #include <drivers/block_dev.h>
 #include <mem/misc/pool.h>
@@ -26,11 +27,12 @@
 #include <fs/journal.h>
 #include <fs/fs_driver.h>
 #include <fs/vfs.h>
+#include <fs/inode.h>
 #include <fs/ext2.h>
 #include <fs/ext4.h>
 #include <fs/hlpr_path.h>
 #include <fs/mount.h>
-#include <fs/file_system.h>
+#include <fs/super_block.h>
 #include <fs/file_desc.h>
 #include <fs/file_operation.h>
 
@@ -131,11 +133,9 @@ static int ext4_mount_entry(struct nas *nas);
 
 int ext4_write_gdblock(struct nas *nas);
 
-static void ext4_rw_inode(struct nas *nas, struct ext4_inode *fdi,
-		int rw_flag);
+static void ext4_rw_inode(struct nas *nas, struct ext4_inode *fdi, int rw_flag);
 
-int ext4_write_map(struct nas *nas, long position,
-							uint32_t new_block, int op);
+int ext4_write_map(struct nas *nas, long position, uint32_t new_block, int op);
 
 /* ext filesystem description pool */
 POOL_DEF(ext4_fs_pool, struct ext4_fs_info, 128);
@@ -147,13 +147,12 @@ POOL_DEF(ext4_file_pool, struct ext4_file_info, 128);
 
 /* TODO link counter */
 
-static struct idesc *ext4fs_open(struct node *node, struct file_desc *file_desc,
-		int flags);
+static struct idesc *ext4fs_open(struct inode *node, struct idesc *idesc);
 static int ext4fs_close(struct file_desc *desc);
 static size_t ext4fs_read(struct file_desc *desc, void *buf, size_t size);
 static size_t ext4fs_write(struct file_desc *desc, void *buf, size_t size);
 
-static struct kfile_operations ext4_fop = {
+static struct file_operations ext4_fop = {
 	.open = ext4fs_open,
 	.close = ext4fs_close,
 	.read = ext4fs_read,
@@ -190,7 +189,7 @@ static void *ext4_extent_get_extents_in_block(struct nas *nas, uint32_t block) {
 	uint32_t extents_len;
 	struct ext4_fs_info *fsi;
 
-	fsi = nas->fs->fsi;
+	fsi = nas->fs->sb_data;
 
 	block_dev_read_buffered(nas->fs->bdev, (char*)&eh,
 			sizeof(struct ext4_extent_header), block * fsi->s_block_size);
@@ -245,7 +244,7 @@ static uint64_t ext4_extent_get_pblock(struct nas *nas, void *extents, uint32_t 
 }
 
 static void ext4_extent_add_block(struct nas *nas, uint32_t lblock, uint64_t pblock) {
-	struct ext4_file_info *fi = nas->fi->privdata;
+	struct ext4_file_info *fi = inode_priv(nas->node);
 	void *extents = fi->f_di.i_block;
 	struct ext4_extent_header *eh = extents;
 	struct ext4_extent *ee_array;
@@ -265,7 +264,7 @@ static void ext4_extent_add_block(struct nas *nas, uint32_t lblock, uint64_t pbl
 static void *ext4_buff_alloc(struct nas *nas, size_t size) {
 	struct ext4_fs_info *fsi;
 
-	fsi = nas->fs->fsi;
+	fsi = nas->fs->sb_data;
 	if (size < fsi->s_block_size) {
 		size = fsi->s_block_size;
 	}
@@ -281,11 +280,7 @@ static void *ext4_buff_alloc(struct nas *nas, size_t size) {
 	return phymem_alloc(fsi->s_page_count);
 }
 
-static int ext4_buff_free(struct nas *nas, char *buff) {
-	struct ext4_fs_info *fsi;
-
-	fsi = nas->fs->fsi;
-
+static int ext4_buff_free(struct ext4_fs_info *fsi, char *buff) {
 	if ((0 != fsi->s_page_count) && (NULL != buff)) {
 		phymem_free(buff, fsi->s_page_count);
 	}
@@ -295,7 +290,7 @@ static int ext4_buff_free(struct nas *nas, char *buff) {
 static int ext4_read_sector(struct nas *nas, char *buffer, uint32_t count,
 		uint32_t sector) {
 	struct ext4_fs_info *fsi;
-	fsi = nas->fs->fsi;
+	fsi = nas->fs->sb_data;
 
 	if (0 > block_dev_read(nas->fs->bdev, (char *) buffer,
 					count * fsi->s_block_size, fsbtodb(fsi, sector))) {
@@ -310,9 +305,9 @@ int ext4_write_sector(struct nas *nas, char *buffer, uint32_t count,
 		uint32_t sector) {
 	struct ext4_fs_info *fsi;
 
-	fsi = nas->fs->fsi;
+	fsi = nas->fs->sb_data;
 
-	if (!strcmp(nas->fs->drv->name, "ext3")) {
+	if (!strcmp(nas->fs->fs_drv->name, "ext3")) {
 		/* EXT3 */
 		int i = 0;
 		journal_t *jp = fsi->journal;
@@ -378,7 +373,7 @@ static int ext4_read_symlink(struct nas *nas, uint32_t parent_inumber,
 	uint32_t disk_block;
 	struct ext4_file_info *fi;
 
-	fi = nas->fi->privdata;
+	fi = inode_priv(nas->node);
 
 	nlinks = 0;
 	link_len = ext4_file_size(fi->f_di);
@@ -445,11 +440,11 @@ static uint8_t ext4_type_from_mode_fmt(mode_t mode) {
 int ext4_close(struct nas *nas) {
 	struct ext4_file_info *fi;
 
-	fi = nas->fi->privdata;
+	fi = inode_priv(nas->node);
 
 	if (NULL != fi) {
 		if (NULL != fi->f_buf) {
-			ext4_buff_free(nas, fi->f_buf);
+			ext4_buff_free(nas->fs->sb_data, fi->f_buf);
 		}
 	}
 
@@ -465,8 +460,8 @@ int ext4_open(struct nas *nas) {
 	struct ext4_file_info *fi;
 	struct ext4_fs_info *fsi;
 
-	fi = nas->fi->privdata;
-	fsi = nas->fs->fsi;
+	fi = inode_priv(nas->node);
+	fsi = nas->fs->sb_data;
 
 	/* prepare full path into this filesystem */
 	vfs_get_relative_path(nas->node, path, PATH_MAX);
@@ -544,16 +539,16 @@ int ext4_open(struct nas *nas) {
 /*
  * file_operation
  */
-static struct idesc *ext4fs_open(struct node *node, struct file_desc *desc, int flags) {
+static struct idesc *ext4fs_open(struct inode *node, struct idesc *idesc) {
 	int rc;
 	struct nas *nas;
 	struct ext4_file_info *fi;
 	struct ext4_fs_info *fsi;
 
 	nas = node->nas;
-	fi = nas->fi->privdata;
-	fsi = nas->fs->fsi;
-	fi->f_pointer = desc->cursor; /* reset seek pointer */
+	fi = inode_priv(node);
+	fsi = nas->fs->sb_data;
+	fi->f_pointer = file_get_pos(file_desc_from_idesc(idesc)); /* reset seek pointer */
 
 	if (NULL == (fi->f_buf = ext4_buff_alloc(nas, fsi->s_block_size))) {
 		return err_ptr(ENOMEM);
@@ -564,10 +559,10 @@ static struct idesc *ext4fs_open(struct node *node, struct file_desc *desc, int 
 		return err_ptr(rc);
 	}
 	else {
-		nas->fi->ni.size = ext4_file_size(fi->f_di);
+		file_set_size(file_desc_from_idesc(idesc), ext4_file_size(fi->f_di));
 	}
 
-	return &desc->idesc;
+	return idesc;
 }
 
 static int ext4fs_close(struct file_desc *desc) {
@@ -576,7 +571,7 @@ static int ext4fs_close(struct file_desc *desc) {
 	if (NULL == desc) {
 		return 0;
 	}
-	nas = desc->node->nas;
+	nas = desc->f_inode->nas;
 
 	return ext4_close(nas);
 }
@@ -590,9 +585,9 @@ static size_t ext4fs_read(struct file_desc *desc, void *buff, size_t size) {
 	struct nas *nas;
 	struct ext4_file_info *fi;
 
-	nas = desc->node->nas;
-	fi = nas->fi->privdata;
-	fi->f_pointer = desc->cursor;
+	nas = desc->f_inode->nas;
+	fi = inode_priv(nas->node);
+	fi->f_pointer = file_get_pos(desc);
 
 	while (size != 0) {
 		/* XXX should handle LARGEFILE */
@@ -617,8 +612,6 @@ static size_t ext4fs_read(struct file_desc *desc, void *buff, size_t size) {
 		size -= csize;
 	}
 
-	desc->cursor = fi->f_pointer;
-
 	return (addr - (char *) buff);
 }
 
@@ -627,14 +620,13 @@ static size_t ext4fs_write(struct file_desc *desc, void *buff, size_t size) {
 	struct nas *nas;
 	struct ext4_file_info *fi;
 
-	nas = desc->node->nas;
-	fi = nas->fi->privdata;
-	fi->f_pointer = desc->cursor;
+	nas = desc->f_inode->nas;
+	fi = inode_priv(nas->node);
+	fi->f_pointer = file_get_pos(desc);
 
 	bytecount = ext4_write_file(nas, buff, size);
 
-	desc->cursor = fi->f_pointer;
-	nas->fi->ni.size = ext4_file_size(fi->f_di);
+	file_set_size(desc, ext4_file_size(fi->f_di));
 
 	return bytecount;
 }
@@ -642,41 +634,37 @@ static size_t ext4fs_write(struct file_desc *desc, void *buff, size_t size) {
 static int ext4_create(struct nas *nas, struct nas * parents_nas);
 static int ext4_mkdir(struct nas *nas, struct nas * parents_nas);
 static int ext4_unlink(struct nas *dir_nas, struct nas *nas);
-static void ext4_free_fs(struct nas *nas);
-static int ext4_umount_entry(struct nas *nas);
+static void ext4_free_fs(struct super_block *sb);
+static int ext4fs_umount_entry(struct inode *node);
 
-static int ext4fs_init(void * par);
-static int ext4fs_format(void *dev);
-static int ext4fs_mount(void *dev, void *dir);
-static int ext4fs_create(struct node *parent_node, struct node *node);
-static int ext4fs_delete(struct node *node);
-static int ext4fs_truncate(struct node *node, off_t length);
-static int ext4fs_umount(void *dir);
-
+static int ext4fs_format(struct block_dev *dev, void *priv);
+static int ext4fs_fill_sb(struct super_block *sb, const char *source);
+static int ext4fs_clean_sb(struct super_block *sb);
+static int ext4fs_mount(struct super_block *sb, struct inode *dest);
+static int ext4fs_create(struct inode *parent_node, struct inode *node);
+static int ext4fs_delete(struct inode *node);
+static int ext4fs_truncate(struct inode *node, off_t length);
 
 static struct fsop_desc ext4_fsop = {
-	.init	     = ext4fs_init,
-	.format      = ext4fs_format,
-	.mount	     = ext4fs_mount,
-	.create_node = ext4fs_create,
-	.delete_node = ext4fs_delete,
+	.format       = ext4fs_format,
+	.mount	      = ext4fs_mount,
+	.create_node  = ext4fs_create,
+	.delete_node  = ext4fs_delete,
 
-	.getxattr    = ext2fs_getxattr,
-	.setxattr    = ext2fs_setxattr,
-	.listxattr   = ext2fs_listxattr,
+	.getxattr     = ext2fs_getxattr,
+	.setxattr     = ext2fs_setxattr,
+	.listxattr    = ext2fs_listxattr,
 
-	.truncate    = ext4fs_truncate,
-	.umount      = ext4fs_umount,
-};
-
-static int ext4fs_init(void * par) {
-	return 0;
+	.truncate     = ext4fs_truncate,
+	.umount_entry = ext4fs_umount_entry,
 };
 
 static struct fs_driver ext4fs_driver = {
-	.name = EXT4_NAME,
-	.file_op = &ext4_fop,
-	.fsop = &ext4_fsop,
+	.name     = EXT4_NAME,
+	.fill_sb  = ext4fs_fill_sb,
+	.clean_sb = ext4fs_clean_sb,
+	.file_op  = &ext4_fop,
+	.fsop     = &ext4_fsop,
 };
 
 static ext4_file_info_t *ext4_fi_alloc(struct nas *nas, void *fs) {
@@ -685,14 +673,13 @@ static ext4_file_info_t *ext4_fi_alloc(struct nas *nas, void *fs) {
 	fi = pool_alloc(&ext4_file_pool);
 	if (fi) {
 		nas->fi->ni.size = fi->f_pointer = 0;
-		nas->fi->privdata = fi;
-		nas->fs = fs;
+		inode_priv_set(nas->node, fi);
 	}
 
 	return fi;
 }
 
-static int ext4fs_create(struct node *parent_node, struct node *node) {
+static int ext4fs_create(struct inode *parent_node, struct inode *node) {
 	int rc;
 	struct nas *nas, *parents_nas;
 
@@ -716,16 +703,13 @@ static int ext4fs_create(struct node *parent_node, struct node *node) {
 
 extern int main_mke2fs(int argc, char **argv);
 
-static int ext4fs_format(void *dev) {
-	struct node *dev_node;
+static int ext4fs_format(struct block_dev *dev, void *priv) {
 	int argc = 6;
 	char *argv[6];
 	char dev_path[64];
 
-	dev_node = dev;
-
 	strcpy(dev_path, "/dev/");
-	strcat(dev_path, dev_node->name);
+	strcat(dev_path, dev->name);
 
 	argv[0] = "mke2fs";
 	argv[1] = "-b";
@@ -738,9 +722,9 @@ static int ext4fs_format(void *dev) {
 	return main_mke2fs(argc, argv);
 }
 
-static int ext4fs_delete(struct node *node) {
+static int ext4fs_delete(struct inode *node) {
 	int rc;
-	node_t *parents;
+	struct inode *parents;
 
 	if (NULL == (parents = vfs_subtree_get_parent(node))) {
 		rc = ENOENT;
@@ -751,55 +735,44 @@ static int ext4fs_delete(struct node *node) {
 		return -rc;
 	}
 
-	vfs_del_leaf(node);
+	return 0;
+}
+
+static int ext4fs_fill_sb(struct super_block *sb, const char *source) {
+	struct ext4_fs_info *fsi;
+	struct block_dev *bdev = bdev_by_path(source);
+	if (NULL == bdev) {
+		return -ENODEV;
+	}
+	sb->bdev = bdev;
+
+	if (NULL == (fsi = pool_alloc(&ext4_fs_pool))) {
+		return -ENOMEM;
+	}
+	memset(fsi, 0, sizeof(struct ext4_fs_info));
+	sb->sb_data = fsi;
 
 	return 0;
 }
 
-static int ext4fs_mount(void *dev, void *dir) {
+static int ext4fs_mount(struct super_block *sb, struct inode *dest) {
 	int rc;
-	struct node *dir_node, *dev_node;
-	struct nas *dir_nas, *dev_nas;
+	struct nas *dir_nas;
 	struct ext4_file_info *fi;
 	struct ext4_fs_info *fsi;
-	struct node_fi *dev_fi;
 
-	dev_node = dev;
-	dev_nas = dev_node->nas;
-	dir_node = dir;
-	dir_nas = dir_node->nas;
-
-	if (NULL == (dev_fi = dev_nas->fi)) {
-		rc = ENODEV;
-		return -rc;
-	}
-
-	if (NULL == (dir_nas->fs = filesystem_create(EXT4_NAME))) {
-		rc = ENOMEM;
-		goto error;
-	}
-
-	dir_nas->fs->bdev = dev_fi->privdata;
-
-	/* allocate this fs info */
-	if (NULL == (fsi = pool_alloc(&ext4_fs_pool))) {
-		dir_nas->fs->fsi = fsi;
-		rc = ENOMEM;
-		goto error;
-	}
-	memset(fsi, 0, sizeof(struct ext4_fs_info));
-	dir_nas->fs->fsi = fsi;
+	dir_nas = dest->nas;
 
 	if (NULL == (fi = pool_alloc(&ext4_file_pool))) {
-		dir_nas->fi->privdata = (void *) fi;
 		rc = ENOMEM;
 		goto error;
 	}
 	memset(fi, 0, sizeof(struct ext4_file_info));
 	fi->f_pointer = 0;
-	dir_nas->fi->privdata = (void *) fi;
+	inode_priv_set(dest, fi);
 
 	/* presetting that we think */
+	fsi = sb->sb_data;
 	fsi->s_block_size = SBSIZE;
 	fsi->s_sectors_in_block = fsi->s_block_size / 512;
 	if (0 != (rc = ext4_read_sblock(dir_nas))) {
@@ -817,15 +790,16 @@ static int ext4fs_mount(void *dev, void *dir) {
 	if (0 != (rc = ext4_mount_entry(dir_nas))) {
 		goto error;
 	}
+
 	return 0;
 
-	error:
-	ext4_free_fs(dir_nas);
+error:
+	ext4_free_fs(sb);
 
 	return -rc;
 }
 
-static int ext4fs_truncate (struct node *node, off_t length) {
+static int ext4fs_truncate (struct inode *node, off_t length) {
 	struct nas *nas = node->nas;
 
 	nas->fi->ni.size = length;
@@ -833,57 +807,24 @@ static int ext4fs_truncate (struct node *node, off_t length) {
 	return 0;
 }
 
-static int ext4fs_umount(void *dir) {
-	struct node *dir_node;
-	struct nas *dir_nas;
-
-	dir_node = dir;
-	dir_nas = dir_node->nas;
-
-	/* delete all entry node */
-	ext4_umount_entry(dir_nas);
-
-	/* free ext2 file system pools and buffers*/
-	ext4_free_fs(dir_nas);
-
+static int ext4fs_clean_sb(struct super_block *sb) {
+	ext4_free_fs(sb);
 	return 0;
 }
 
-static void ext4_free_fs(struct nas *nas) {
-	struct ext4_file_info *fi;
-	struct ext4_fs_info *fsi;
+static void ext4_free_fs(struct super_block *sb) {
+	struct ext4_fs_info *fsi = sb->sb_data;
 
-	if(NULL != nas->fs) {
-		fsi = nas->fs->fsi;
-
-		if(NULL != fsi) {
-			if(NULL != fsi->e4fs_gd) {
-				ext4_buff_free(nas, (char *) fsi->e4fs_gd);
-			}
-			pool_free(&ext4_fs_pool, fsi);
+	if (NULL != fsi) {
+		if(NULL != fsi->e4fs_gd) {
+			ext4_buff_free(fsi, (char *) fsi->e4fs_gd);
 		}
-		filesystem_free(nas->fs);
-	}
-
-	if(NULL != (fi = nas->fi->privdata)) {
-		pool_free(&ext4_file_pool, fi);
+		pool_free(&ext4_fs_pool, fsi);
 	}
 }
 
-
-static int ext4_umount_entry(struct nas *nas) {
-	struct node *child;
-
-	if (node_is_directory(nas->node)) {
-		while (NULL != (child = vfs_subtree_get_child_next(nas->node, NULL))) {
-			if (node_is_directory(child)) {
-				ext4_umount_entry(child->nas);
-			}
-
-			pool_free(&ext4_file_pool, child->nas->fi->privdata);
-			vfs_del_leaf(child);
-		}
-	}
+static int ext4fs_umount_entry(struct inode *node) {
+	pool_free(&ext4_file_pool, inode_priv(node));
 
 	return 0;
 }
@@ -899,8 +840,8 @@ static int ext4_read_inode(struct nas *nas, uint32_t inumber) {
 	struct ext4_file_info *fi;
 	struct ext4_fs_info *fsi;
 
-	fi = nas->fi->privdata;
-	fsi = nas->fs->fsi;
+	fi = inode_priv(nas->node);
+	fsi = nas->fs->sb_data;
 
 	rsize = EXT4_DINODE_SIZE(fsi);
 
@@ -932,7 +873,7 @@ static int ext4_read_inode(struct nas *nas, uint32_t inumber) {
 static int ext4_block_map(struct nas *nas, int32_t file_block,
 		uint32_t *disk_block_p) {
 	uint32_t len;
-	struct ext4_file_info *fi = nas->fi->privdata;
+	struct ext4_file_info *fi = inode_priv(nas->node);
 
 	*disk_block_p = ext4_extent_get_pblock(nas, fi->f_di.i_block, file_block, &len);
 
@@ -952,8 +893,8 @@ static int ext4_buf_read_file(struct nas *nas, char **buf_p, size_t *size_p) {
 	struct ext4_file_info *fi;
 	struct ext4_fs_info *fsi;
 
-	fi = nas->fi->privdata;
-	fsi = nas->fs->fsi;
+	fi = inode_priv(nas->node);
+	fsi = nas->fs->sb_data;
 
 	off = blkoff(fsi, fi->f_pointer);
 	file_block = lblkno(fsi, fi->f_pointer);
@@ -1008,8 +949,8 @@ static size_t ext4_write_file(struct nas *nas, char *buf, size_t size) {
 	struct ext4_file_info *fi;
 	struct ext4_fs_info *fsi;
 
-	fi = nas->fi->privdata;
-	fsi = nas->fs->fsi;
+	fi = inode_priv(nas->node);
+	fsi = nas->fs->sb_data;
 
 	block_size = fsi->s_block_size; /* no fragment */
 	bytecount = 0;
@@ -1102,7 +1043,7 @@ static int ext4_search_directory(struct nas *nas, const char *name, int length,
 	int namlen;
 	struct ext4_file_info *fi;
 
-	fi = nas->fi->privdata;
+	fi = inode_priv(nas->node);
 	fi->f_pointer = 0;
 	/* XXX should handle LARGEFILE */
 	while (fi->f_pointer < (long) ext4_file_size(fi->f_di)) {
@@ -1137,7 +1078,7 @@ static int ext4_search_directory(struct nas *nas, const char *name, int length,
 int ext4_write_sblock(struct nas *nas) {
 	struct ext4_fs_info *fsi;
 
-	fsi = nas->fs->fsi;
+	fsi = nas->fs->sb_data;
 
 	if (1 != ext4_write_sector(nas, (char *) &fsi->e4sb, 1,
 					dbtofsb(fsi, SBOFF / SECTOR_SIZE))) {
@@ -1152,7 +1093,7 @@ static int ext4_read_sblock(struct nas *nas) {
 	struct ext4_super_block *ext4sb;
 	int ret = 0;
 
-	fsi = nas->fs->fsi;
+	fsi = nas->fs->sb_data;
 	ext4sb = &fsi->e4sb;
 
 	if (!(sbbuf = ext4_buff_alloc(nas, fsi->s_block_size))) {
@@ -1166,7 +1107,7 @@ static int ext4_read_sblock(struct nas *nas) {
 	}
 
 	e2fs_sbload(sbbuf, ext4sb);
-	ext4_buff_free(nas, sbbuf);
+	ext4_buff_free(fsi, sbbuf);
 
 	if (ext4sb->s_magic != E2FS_MAGIC) {
 		ret = EINVAL;
@@ -1210,7 +1151,7 @@ static int ext4_read_sblock(struct nas *nas) {
 	fsi->s_desc_per_block = fsi->s_block_size / sizeof(struct ext4_group_desc);
 
 out:
-	ext4_buff_free(nas, sbbuf);
+	ext4_buff_free(fsi, sbbuf);
 	return ret;
 }
 
@@ -1240,7 +1181,7 @@ int ext4_write_gdblock(struct nas *nas) {
 	char *buff;
 	struct ext4_fs_info *fsi;
 
-	fsi = nas->fs->fsi;
+	fsi = nas->fs->sb_data;
 
 	gdpb = fsi->s_block_size / sizeof(struct ext4_group_desc);
 
@@ -1266,7 +1207,7 @@ static int ext4_read_gdblock(struct nas *nas) {
 	void *gdbuf = NULL;
 	int ret = 0;
 
-	fsi = nas->fs->fsi;
+	fsi = nas->fs->sb_data;
 
 	gdpb = fsi->s_block_size / sizeof(struct ext4_group_desc);
 
@@ -1288,7 +1229,7 @@ static int ext4_read_gdblock(struct nas *nas) {
 				: fsi->s_block_size);
 	}
 out:
-	ext4_buff_free(nas, gdbuf);
+	ext4_buff_free(fsi, gdbuf);
 	return ret;
 }
 
@@ -1300,7 +1241,7 @@ static int ext4_mount_entry(struct nas *dir_nas) {
 	struct ext4_file_info *dir_fi, *fi;
 	struct ext4_fs_info *fsi;
 	char *name, *name_buff;
-	node_t *node;
+	struct inode *node;
 	mode_t mode;
 
 	rc = 0;
@@ -1314,10 +1255,10 @@ static int ext4_mount_entry(struct nas *dir_nas) {
 		goto out;
 	}
 
-	dir_fi = dir_nas->fi->privdata;
-	fsi = dir_nas->fs->fsi;
+	dir_fi = inode_priv(dir_nas->node);
+	fsi = dir_nas->fs->sb_data;
 
-	dir_nas->node->mode = dir_fi->f_di.i_mode;
+	dir_nas->node->i_mode = dir_fi->f_di.i_mode;
 	dir_nas->node->uid = dir_fi->f_di.i_uid;
 	dir_nas->node->gid = dir_fi->f_di.i_gid;
 
@@ -1375,8 +1316,8 @@ static int ext4_mount_entry(struct nas *dir_nas) {
 				/* read inode into fi->f_di*/
 				if (0 == ext4_open(node->nas)) {
 					/* Load permisiions and credentials. */
-					assert((node->mode & S_IFMT) == (fi->f_di.i_mode & S_IFMT));
-					node->mode = fi->f_di.i_mode;
+					assert((node->i_mode & S_IFMT) == (fi->f_di.i_mode & S_IFMT));
+					node->i_mode = fi->f_di.i_mode;
 					node->uid = fi->f_di.i_uid;
 					node->gid = fi->f_di.i_gid;
 				}
@@ -1387,7 +1328,7 @@ static int ext4_mount_entry(struct nas *dir_nas) {
 	}
 
 	out: ext4_close(dir_nas);
-	ext4_buff_free(dir_nas, name_buff);
+	ext4_buff_free(fsi, name_buff);
 	return rc;
 }
 
@@ -1404,8 +1345,8 @@ static int ext4_new_block(struct nas *nas, long position) {
 	struct ext4_fs_info *fsi;
 	uint32_t b, lblock;
 
-	fi = nas->fi->privdata;
-	fsi = nas->fs->fsi;
+	fi = inode_priv(nas->node);
+	fsi = nas->fs->sb_data;
 
 	lblock = lblkno(fsi, position);
 
@@ -1442,8 +1383,9 @@ static int ext4_new_node(struct nas *nas,
 static int ext4_create(struct nas *nas, struct nas *parents_nas) {
 	int rc;
 	struct ext4_file_info *fi, *dir_fi;
+	struct ext4_fs_info *fsi;
 
-	dir_fi = parents_nas->fi->privdata;
+	dir_fi = inode_priv(parents_nas->node);
 
 	if (0 != (rc = ext4_open(parents_nas))) {
 		return rc;
@@ -1453,15 +1395,16 @@ static int ext4_create(struct nas *nas, struct nas *parents_nas) {
 	if (0 != (rc = ext4_new_node(nas, parents_nas))) {
 		return rc;
 	}
-	fi = nas->fi->privdata;
+	fi = inode_priv(nas->node);
 
 	dir_fi->f_di.i_links_count++;
 	ext4_rw_inode(parents_nas, &dir_fi->f_di, EXT4_W_INODE);
 
 	ext4_close(parents_nas);
 
+	fsi = nas->node->i_sb->sb_data;
 	if (NULL != fi) {
-		ext4_buff_free(nas, fi->f_buf);
+		ext4_buff_free(fsi, fi->f_buf);
 		return 0;
 	}
 	return ENOSPC;
@@ -1472,13 +1415,14 @@ static int ext4_mkdir(struct nas *nas, struct nas *parents_nas) {
 	int r1, r2; /* status codes */
 	ino_t dot, dotdot; /* inode numbers for . and .. */
 	struct ext4_file_info *fi, *dir_fi;
+	struct ext4_fs_info *fsi;
 
 	if (!node_is_directory(parents_nas->node)) {
 		rc = ENOTDIR;
 		return rc;
 	}
 
-	dir_fi = parents_nas->fi->privdata;
+	dir_fi = inode_priv(parents_nas->node);
 
 	/* read the directory inode */
 	if (0 != (rc = ext4_open(parents_nas))) {
@@ -1489,7 +1433,7 @@ static int ext4_mkdir(struct nas *nas, struct nas *parents_nas) {
 		ext4_close(parents_nas);
 		return ENOSPC;
 	}
-	fi = nas->fi->privdata;
+	fi = inode_priv(nas->node);
 	/* Get the inode numbers for . and .. to enter in the directory. */
 	dotdot = dir_fi->f_num; /* parent's inode number */
 	dot = fi->f_num; /* inode number of the new dir itself */
@@ -1514,7 +1458,8 @@ static int ext4_mkdir(struct nas *nas, struct nas *parents_nas) {
 	dir_fi->f_di.i_links_count++;
 	ext4_rw_inode(parents_nas, &dir_fi->f_di, EXT4_W_INODE);
 
-	ext4_buff_free(nas, fi->f_buf);
+	fsi = nas->fs->sb_data;
+	ext4_buff_free(fsi, fi->f_buf);
 	ext4_close(parents_nas);
 
 	if (NULL == fi) {
@@ -1582,8 +1527,8 @@ static int ext4_free_inode_bit(struct nas *nas, uint32_t bit_returned,
 	struct ext4_fs_info *fsi;
 	struct ext4_file_info *fi;
 
-	fi = nas->fi->privdata;
-	fsi = nas->fs->fsi;
+	fi = inode_priv(nas->node);
+	fsi = nas->fs->sb_data;
 	/* At first search group, to which bit_returned belongs to
 	 * and figure out in what word bit is stored.
 	 */
@@ -1625,8 +1570,8 @@ static uint32_t ext4_alloc_inode_bit(struct nas *nas, int is_dir) { /* inode wil
 	struct ext4_file_info *fi;
 	struct ext4_fs_info *fsi;
 
-	fi = nas->fi->privdata;
-	fsi = nas->fs->fsi;
+	fi = inode_priv(nas->node);
+	fsi = nas->fs->sb_data;
 	inumber = 0;
 
 	group = ext4_find_group_any(fsi);
@@ -1687,8 +1632,8 @@ static int ext4_free_inode(struct nas *nas) { /* ext4_file_info to free */
 	struct ext4_file_info *fi;
 	struct ext4_fs_info *fsi;
 
-	fi = nas->fi->privdata;
-	fsi = nas->fs->fsi;
+	fi = inode_priv(nas->node);
+	fsi = nas->fs->sb_data;
 
 	/* Locate the appropriate super_block. */
 	if (0!= (rc = ext4_read_sblock(nas))) {
@@ -1728,8 +1673,8 @@ static int ext4_alloc_inode(struct nas *nas,
 	struct ext4_fs_info *fsi;
 	uint32_t b;
 
-	dir_fi = parents_nas->fi->privdata;
-	fsi = parents_nas->fs->fsi;
+	dir_fi = inode_priv(parents_nas->node);
+	fsi = parents_nas->fs->sb_data;
 
 	if (NULL == (fi = ext4_fi_alloc(nas, parents_nas->fs))) {
 		rc = ENOSPC;
@@ -1760,7 +1705,7 @@ static int ext4_alloc_inode(struct nas *nas,
 	out: vfs_del_leaf(nas->node);
 	if (NULL != fi) {
 		if (NULL != fi->f_buf) {
-			ext4_buff_free(nas, fi->f_buf);
+			ext4_buff_free(fsi, fi->f_buf);
 		}
 		pool_free(&ext4_file_pool, fi);
 	}
@@ -1778,8 +1723,8 @@ static void ext4_rw_inode(struct nas *nas, struct ext4_inode *fdi,
 	struct ext4_file_info *fi;
 	struct ext4_fs_info *fsi;
 
-	fi = nas->fi->privdata;
-	fsi = nas->fs->fsi;
+	fi = inode_priv(nas->node);
+	fsi = nas->fs->sb_data;
 
 	/* Get the block where the inode resides. */
 	ext4_read_sblock(nas);
@@ -1838,8 +1783,8 @@ static int ext4_dir_operation(struct nas *nas, char *string, ino_t *numb,
 	struct ext4_file_info *fi;
 	struct ext4_fs_info *fsi;
 
-	fi = nas->fi->privdata;
-	fsi = nas->fs->fsi;
+	fi = inode_priv(nas->node);
+	fsi = nas->fs->sb_data;
 	/* If 'fi' is not a pointer to a dir inode, error. */
 	if (!node_is_directory(nas->node)) {
 		return ENOTDIR;
@@ -2025,7 +1970,7 @@ static int ext4_new_node(struct nas *nas,
 	struct ext4_inode fdi;
 	struct ext4_fs_info *fsi;
 
-	fsi = parents_nas->fs->fsi;
+	fsi = parents_nas->fs->sb_data;
 
 	/* Last path component does not exist.  Make new directory entry. */
 	if (0 != (rc = ext4_alloc_inode(nas, parents_nas))) {
@@ -2033,7 +1978,7 @@ static int ext4_new_node(struct nas *nas,
 		return rc;
 	}
 
-	fi = nas->fi->privdata;
+	fi = inode_priv(nas->node);
 
 	/* Force inode to the disk before making directory entry to make
 	 * the system more robust in the face of a crash: an inode with
@@ -2046,7 +1991,7 @@ static int ext4_new_node(struct nas *nas,
 		}
 		fi->f_di.i_links_count++; /* directory have 2 links */
 	}
-	fi->f_di.i_mode = nas->node->mode;
+	fi->f_di.i_mode = nas->node->i_mode;
 	fi->f_di.i_links_count++;
 
 	memcpy(&fdi, &fi->f_di, sizeof(struct ext4_inode));
@@ -2054,7 +1999,7 @@ static int ext4_new_node(struct nas *nas,
 
 	/* New inode acquired.  Try to make directory entry. */
 	if (0 != (rc = ext4_dir_operation(parents_nas, (char *) nas->node->name,
-			&fi->f_num, ENTER, nas->node->mode))) {
+			&fi->f_num, ENTER, nas->node->i_mode))) {
 		return rc;
 	}
 	/* The caller has to return the directory ext4_file_info (*dir_fi).  */
@@ -2086,7 +2031,7 @@ static int ext4_remove_dir(struct nas *dir_nas, struct nas *nas) {
 	char *dir_name;
 	struct ext4_file_info *fi;
 
-	fi = nas->fi->privdata;
+	fi = inode_priv(nas->node);
 	dir_name = (char *) nas->node->name;
 
 	/* search_dir checks that rip is a directory too. */
@@ -2120,7 +2065,7 @@ static int ext4_unlink(struct nas *dir_nas, struct nas *nas) {
 	int rc;
 	struct ext4_file_info *dir_fi;
 
-	dir_fi = dir_nas->fi->privdata;
+	dir_fi = inode_priv(dir_nas->node);
 
 	/* Temporarily open the dir. */
 	if (0 != (rc = ext4_open(dir_nas))) {
@@ -2145,4 +2090,3 @@ static int ext4_unlink(struct nas *dir_nas, struct nas *nas) {
 }
 
 DECLARE_FILE_SYSTEM_DRIVER(ext4fs_driver);
-

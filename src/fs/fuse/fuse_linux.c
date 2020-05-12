@@ -19,7 +19,7 @@
 
 ARRAY_SPREAD_DEF(const struct fuse_module *const, fuse_module_repo);
 
-struct fuse_module *fuse_module_lookup(char *fuse_type) {
+struct fuse_module *fuse_module_lookup(const char *fuse_type) {
 	struct fuse_module *fm;
 	array_spread_foreach(fm, fuse_module_repo) {
 		if (0 == strcmp(fuse_type, fm->fuse_module_name)) {
@@ -37,7 +37,7 @@ struct fuse_mount_params {
 
 static int fuse_fill_dentry(struct super_block *sb, char *dest) {
 	struct dentry *d;
-	struct lookup lookup;
+	struct lookup lookup = {};
 	int err;
 
 	if ((err = dvfs_lookup(dest, &lookup))) {
@@ -47,12 +47,13 @@ static int fuse_fill_dentry(struct super_block *sb, char *dest) {
 	assert(lookup.item);
 	assert(lookup.item->flags & S_IFDIR);
 
-	if (!(lookup.item->flags & DVFS_DIR_VIRTUAL)) {
+	if (!(lookup.item->flags & VFS_DIR_VIRTUAL)) {
 		/* Hide dentry of the directory */
 		dlist_del(&lookup.item->children_lnk);
 		dvfs_cache_del(lookup.item);
 
 		d = dvfs_alloc_dentry();
+		dentry_ref_inc(d);
 
 		dentry_fill(sb, NULL, d, lookup.parent);
 		strcpy(d->name, lookup.item->name);
@@ -66,7 +67,7 @@ static int fuse_fill_dentry(struct super_block *sb, char *dest) {
 
 	d->d_inode = dvfs_alloc_inode(sb);
 	*d->d_inode = (struct inode ) {
-		.flags = S_IFDIR,
+		.i_mode = S_IFDIR,
 		.i_ops = sb->sb_iops,
 		.i_sb = sb,
 		.i_dentry = d,
@@ -79,7 +80,7 @@ static void *fuse_module_mount_process(void *arg) {
 	struct fuse_mount_params *params;
 	const struct cmd *cmd;
 	struct super_block *sb;
-	const struct dumb_fs_driver *fs_drv;
+	const struct fs_driver *fs_drv;
 	char *argv[3];
 	char argv0[0x20];
 	char argv1[0x20];
@@ -90,7 +91,7 @@ static void *fuse_module_mount_process(void *arg) {
 	cmd = cmd_lookup(params->fm->fuse_module_cmd_mount);
 	assert(cmd);
 
-	fs_drv = dumb_fs_driver_find(params->fm->fuse_module_cmd_mount);
+	fs_drv = fs_driver_find(params->fm->fuse_module_cmd_mount);
 	assert(fs_drv);
 
 	strncpy(argv0, params->fm->fuse_module_cmd_mount, sizeof(argv0));
@@ -103,7 +104,7 @@ static void *fuse_module_mount_process(void *arg) {
 
 	params->fm = NULL;
 
-	sb = dvfs_alloc_sb(fs_drv, NULL);
+	sb = super_block_alloc(fs_drv, NULL);
 	fuse_fill_dentry(sb, argv2);
 
 	cmd_exec(cmd, 3, argv); /* will not return */
@@ -111,7 +112,7 @@ static void *fuse_module_mount_process(void *arg) {
 	return NULL;
 }
 
-int fuse_module_mount(struct fuse_module *fm, char *dev, char *dest) {
+int fuse_module_mount(struct fuse_module *fm, const char *dev, const char *dest) {
 	int res;
 	struct fuse_mount_params params = {fm, dev, dest};
 

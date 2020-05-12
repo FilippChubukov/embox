@@ -8,15 +8,18 @@
 
 #include <errno.h>
 #include <string.h>
+#include <stdint.h>
+#include <sys/mman.h>
+
 #include <hal/reg.h>
 #include <kernel/irq.h>
+#include <kernel/panic.h>
 #include <kernel/time/ktime.h>
 #include <drivers/pci/pci.h>
 #include <drivers/pci/pci_driver.h>
 #include <drivers/usb/usb.h>
 #include <mem/misc/pool.h>
-
-#include <kernel/printk.h>
+#include <util/log.h>
 
 #include "ohci.h"
 
@@ -27,12 +30,17 @@
 			(OHCI_READ(ohcd, &ohcd->base->hc_control) & \
 				~OHCI_CTRL_FUNC_STATE_MASK) | state)
 
+struct ohci_request_priv {
+	uint32_t tds_count;
+};
+
 /* OHCI private stuff */
 /* HCCAs are in separate pool to prevent huge padding */
 POOL_DEF(ohci_hccas, struct ohci_hcca, USB_MAX_HCD);
 POOL_DEF(ohci_hcds, struct ohci_hcd, USB_MAX_HCD);
 POOL_DEF(ohci_eds, struct ohci_ed, USB_MAX_ENDP);
 POOL_DEF(ohci_tds, struct ohci_td, OHCI_MAX_REQUESTS);
+POOL_DEF(ohci_req_priv_pool, struct ohci_request_priv, OHCI_MAX_REQUESTS);
 
 static struct ohci_td *ohci_ed_get_tail_td(struct ohci_ed *ed);
 static int ohci_ed_desched_interrupt(struct ohci_hcd *ohcd, struct ohci_ed *ed);
@@ -42,7 +50,6 @@ static int ohci_ed_desched(struct ohci_hcd *ohcd, struct ohci_ed *ed,
 static void *ohci_hcd_alloc(struct usb_hcd *hcd, void *args) {
 	struct ohci_hcd *ohcd = pool_alloc(&ohci_hcds);
 	struct ohci_hcca *hcca = pool_alloc(&ohci_hccas);
-	unsigned int rh_port_n;
 
 	if (!ohcd) {
 		assert(!hcca);
@@ -54,11 +61,6 @@ static void *ohci_hcd_alloc(struct usb_hcd *hcd, void *args) {
 
 	ohcd->base = (struct ohci_reg *) args;
 	ohcd->hcca = hcca;
-
-	rh_port_n = OHCI_READ(ohcd, &ohcd->base->hc_rh_desc_a)
-		& OHCI_RH_DESC_A_N_DOWNP_M;
-	hcd->root_hub = usb_hub_alloc(hcd, rh_port_n);
-
 	ohcd->hcd = hcd;
 
 	return ohcd;
@@ -92,6 +94,8 @@ static void *ohci_ed_alloc(struct usb_endp *ep) {
 	ed->tail_td = (uint32_t) sentinel_td;
 	ed->next_ed = 0;
 	ed->flags = 64 << 16;
+
+	usb_queue_init(&ed->req_queue);
 
 	return ed;
 }
@@ -156,7 +160,7 @@ static void ohci_ed_fill(struct ohci_ed *ed, struct usb_endp *endp) {
 	REG_ORIN(&ed->flags, OHCI_ED_K);
 
 	flags = (flags & ~OHCI_ED_FUNC_ADDRESS_MASK) |
-		(endp->dev->bus_idx << OHCI_ED_FUNC_ADDRESS_OFFS);
+		(endp->dev->addr << OHCI_ED_FUNC_ADDRESS_OFFS);
 	flags = (flags & ~OHCI_ED_ENDP_ADDRESS_MASK) |
 		(endp->address << OHCI_ED_ENDP_ADDRESS_OFFS);
 
@@ -174,6 +178,7 @@ static int ohci_start(struct usb_hcd *hcd) {
 	uint32_t hc_ctrl;
 	uint32_t hc_state;
 	uint32_t backed_fm_interval;
+	struct usb_dev *udev;
 
 	ohcd = hcd2ohci(hcd);
 
@@ -241,6 +246,13 @@ static int ohci_start(struct usb_hcd *hcd) {
 
 	OHCI_WRITE_STATE(ohcd, OHCI_CTRL_FUNC_STATE_OPRT);
 
+	/* Create root hub */
+	udev = usb_new_device(NULL, hcd, 0);
+	if (!udev) {
+		log_error("ohci_start: usb_new_device failed\n");
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -248,57 +260,85 @@ static int ohci_stop(struct usb_hcd *hcd) {
 	return 0;
 }
 
-static inline unsigned int ohci_port_stat_map(uint16_t val) {
-	unsigned short ret = 0;
-
-	if (val & OHCI_RH_R_CONN_W_CLREN) {
-		ret |= USB_HUB_PORT_CONNECT;
-	}
-	if (val & OHCI_RH_R_PWR_W_STPWR) {
-		ret |= USB_HUB_PORT_POWER;
-	}
-
-	return ret;
+static void ohci_get_hub_descriptor(struct ohci_hcd *ohcd,
+		struct usb_desc_hub *desc) {
+	desc->b_desc_length = 7;
+	desc->b_desc_type = USB_DT_HUB;
+	desc->b_nbr_ports = OHCI_READ(ohcd, &ohcd->base->hc_rh_desc_a)
+		& OHCI_RH_DESC_A_N_DOWNP_M;
 }
 
-static int ohci_rh_ctrl(struct usb_hub_port *port, enum usb_hub_request req,
-			unsigned short value) {
-	struct ohci_hcd *ohcd = hcd2ohci(port->hub->hcd);
-	uint32_t wval = 0;
+static uint32_t ohci_roothub_portstatus(struct ohci_hcd *ohcd,
+		unsigned port) {
+	return OHCI_READ(ohcd, &ohcd->base->hc_rh_port_stat[port]);
+}
 
-	assert(req == USB_HUB_REQ_PORT_SET || req == USB_HUB_REQ_PORT_CLEAR);
+static int ohci_root_hub_control(struct usb_request *req) {
+	struct ohci_hcd *ohcd = hcd2ohci(req->endp->dev->hcd);
+	struct usb_control_header *ctrl = &req->ctrl_header;
+	uint32_t type_req;
+	uint32_t wval;
 
-	if (req == USB_HUB_REQ_PORT_SET) {
-		if (value & USB_HUB_PORT_ENABLE) {
-			wval |= OHCI_RH_R_EN_W_STEN;
+	type_req = (ctrl->bm_request_type << 8) | ctrl->b_request;
+
+	switch (type_req) {
+	case USB_GET_HUB_DESCRIPTOR:
+		ohci_get_hub_descriptor(ohcd, (struct usb_desc_hub *) req->buf);
+		break;
+	case USB_GET_PORT_STATUS:
+		*(uint32_t *)req->buf = ohci_roothub_portstatus(ohcd,
+			ctrl->w_index - 1);
+		break;
+	case USB_SET_PORT_FEATURE:
+		switch (ctrl->w_value) {
+		case USB_PORT_FEATURE_RESET:
+			wval = OHCI_RH_R_RST_W_STRST;
+			break;
+		case USB_PORT_FEATURE_POWER:
+			wval = OHCI_RH_R_PWR_W_STPWR;
+			break;
+		default:
+			log_error("Unknown port set feature: 0x%x\n", ctrl->w_value);
+			return -1;
 		}
-		if (value & USB_HUB_PORT_POWER) {
-			wval |= OHCI_RH_R_PWR_W_STPWR;
+		OHCI_WRITE(ohcd, &ohcd->base->hc_rh_port_stat[ctrl->w_index - 1],
+			wval);
+		break;
+	case USB_CLEAR_PORT_FEATURE:
+		switch (ctrl->w_value) {
+		case USB_PORT_FEATURE_POWER:
+			/* FIXME Disable ohci power off right now, because
+			 * CCS (CurrentConnectStatus) will be cleared forever in QEMU,
+			 * so there is no way to know if a device is attached to this port.
+			 * I don't know currenty whether it's a bug in QEMU ohci or not,
+			 * but ehci works fine with power on/off toggling
+			 */
+			/* wval = OHCI_RH_R_LOWSPD_W_CLPWR;
+			 * OHCI_WRITE(ohcd, &ohcd->base->hc_rh_port_stat[ctrl->w_index - 1],
+			 *	wval);
+			 */
+			break;
+		case USB_PORT_FEATURE_C_CONNECTION:
+			wval = OHCI_RH_PS_CSC;
+			OHCI_WRITE(ohcd, &ohcd->base->hc_rh_port_stat[ctrl->w_index - 1],
+				wval);
+			break;
+		case USB_PORT_FEATURE_C_RESET:
+			/* do nothing */
+			break;
+		default:
+			log_error("Unknown port clear feature: 0x%x\n", ctrl->w_value);
+			return -1;
 		}
-		if (value & USB_HUB_PORT_RESET) {
-			wval |= OHCI_RH_R_RST_W_STRST;
-		}
-	} else {
-		if (value & USB_HUB_PORT_ENABLE) {
-			wval |= OHCI_RH_R_CONN_W_CLREN;
-		}
-		if (value & USB_HUB_PORT_POWER) {
-			wval |= OHCI_RH_R_LOWSPD_W_CLPWR;
-		}
-		if (value & USB_HUB_PORT_RESET) {
-			uint32_t portstat = OHCI_READ(ohcd, &ohcd->base->hc_rh_port_stat[port->idx]);
-			/* if hardware haven't cleared RESET,
-			 * then RESET high signal was not long enough */
-			if (portstat & OHCI_RH_R_RST_W_STRST) {
-				return -EAGAIN;
-			}
-		}
+		break;
+	default:
+		panic("ohci_root_hub_control: Unknown req_type=0x%x, request=0x%x\n",
+			ctrl->bm_request_type, ctrl->b_request);
+		break;
 	}
 
-	OHCI_WRITE(ohcd, &ohcd->base->hc_rh_port_stat[port->idx], wval);
-
-	port->status = ohci_port_stat_map(OHCI_READ(ohcd,
-				&ohcd->base->hc_rh_port_stat[port->idx]));
+	req->req_stat = USB_REQ_NOERR;
+	usb_request_complete(req);
 
 	return 0;
 }
@@ -424,34 +464,50 @@ static void ohci_transfer(struct ohci_ed *ed, uint32_t token, void *buf,
 	ohci_td_enque_tail(ed, next_td);
 }
 
-static int ohci_request(struct usb_request *req) {
+static int ohci_request_do(struct usb_request *req) {
 	struct ohci_hcd *ohcd = hcd2ohci(req->endp->dev->hcd);
 	struct ohci_ed *ed = endp2ohci(req->endp);
 	uint32_t token;
-	int cnt = 0;
+	int tds_count = 0;
+	struct ohci_request_priv *priv;
 
-	if (req->token & USB_TOKEN_SETUP) {
-		token = OHCI_TD_SETUP;
-		cnt++;
-	}
-	if (req->token & USB_TOKEN_IN) {
-		/* Use bufferRounding = 1 to read less than was requested if needed. */
-		token = OHCI_TD_IN | OHCI_TD_BUF_ROUND;
-		cnt++;
-	}
-	if (req->token & USB_TOKEN_OUT) {
-		if (token != OHCI_TD_SETUP) {
-			token = OHCI_TD_OUT;
-			cnt++;
+	/* function address could change due bus enumeration */
+	ohci_ed_fill(ed, req->endp);
+
+	switch (req->endp->type) {
+	case USB_COMM_CONTROL:
+		/* Setup stage */
+		ohci_transfer(ed, OHCI_TD_SETUP, &req->ctrl_header,
+			sizeof req->ctrl_header, req);
+		tds_count++;
+		/* Data stage (optional) */
+		if (req->len > 0) {
+			tds_count++;
+			token = (req->token & USB_TOKEN_OUT) ? OHCI_TD_OUT : OHCI_TD_IN;
+			token |= OHCI_TD_BUF_ROUND;
+			ohci_transfer(ed, token, req->buf, req->len, req);
 		}
+		/* Status stage */
+		tds_count++;
+		token = (req->token & USB_TOKEN_OUT) ? OHCI_TD_IN : OHCI_TD_OUT;
+		ohci_transfer(ed, token, NULL, 0, req);
+		break;
+	case USB_COMM_BULK:
+	case USB_COMM_INTERRUPT:
+	case USB_COMM_ISOCHRON:
+		tds_count++;
+		token = (req->token & USB_TOKEN_OUT) ? OHCI_TD_OUT : OHCI_TD_IN;
+		token |= OHCI_TD_BUF_ROUND;
+		ohci_transfer(ed, token, req->buf, req->len, req);
+		break;
+	default:
+		panic("ohci_request: Unsupported enpd type %d", req->endp->type);
 	}
 
-	assertf(cnt == 1, "only one token is supported");
-
-	ohci_ed_fill(ed, req->endp); /* function address could change due bus
-				   enumeration */
-
-	ohci_transfer(ed, token, req->buf, req->len, req);
+	priv = pool_alloc(&ohci_req_priv_pool);
+	assert(priv);
+	priv->tds_count = tds_count;
+	req->hci_specific = priv;
 
 	if (req->endp->type == USB_COMM_INTERRUPT) {
 		ohci_ed_sched_interrupt(ohcd, ed);
@@ -462,6 +518,14 @@ static int ohci_request(struct usb_request *req) {
 	return 0;
 }
 
+static int ohci_request(struct usb_request *req) {
+	struct ohci_ed *ed = endp2ohci(req->endp);
+	int empty = usb_queue_empty(&ed->req_queue);
+
+	usb_queue_add(&ed->req_queue, &req->req_link);
+	return empty ? ohci_request_do(req) : 0;
+}
+
 static struct usb_hcd_ops ohci_hcd_ops = {
 	.hcd_hci_alloc = ohci_hcd_alloc,
 	.hcd_hci_free = ohci_hcd_free,
@@ -469,7 +533,7 @@ static struct usb_hcd_ops ohci_hcd_ops = {
 	.endp_hci_free = ohci_ed_free,
 	.hcd_start = ohci_start,
 	.hcd_stop = ohci_stop,
-	.rhub_ctrl = ohci_rh_ctrl,
+	.root_hub_control = ohci_root_hub_control,
 	.request = ohci_request,
 };
 
@@ -486,7 +550,7 @@ static inline enum usb_request_status ohci_td_stat(struct ohci_td *td) {
 	}
 }
 
-uint32_t ohci_td_received_len(struct ohci_td *td, struct usb_request *req) {
+static uint32_t ohci_td_received_len(struct ohci_td *td, struct usb_request *req) {
 	assert(((uint32_t) req->buf <= td->buf_p) || !td->buf_p);
 
 	if (!td->buf_p) {
@@ -498,39 +562,26 @@ uint32_t ohci_td_received_len(struct ohci_td *td, struct usb_request *req) {
 	return td->buf_p - (uint32_t) req->buf;
 }
 
-
 static irq_return_t ohci_irq(unsigned int irq_nr, void *data) {
-	struct usb_hcd *hcd = data;
-	struct ohci_hcd *ohcd = hcd2ohci(hcd);
-	uint32_t intr_stat = OHCI_READ(ohcd, &ohcd->base->hc_intstat);
+	struct usb_hcd *hcd;
+	struct ohci_hcd *ohcd;
+	uint32_t intr_stat;
+	struct usb_request *req;
 
-	/*printk("%s: irq_stat=0x%08x\n", __func__, intr_stat);*/
+	hcd = data;
+	ohcd = hcd2ohci(hcd);
+	intr_stat = OHCI_READ(ohcd, &ohcd->base->hc_intstat);
 
 	if (intr_stat & OHCI_INTERRUPT_RHUB) {
-		struct usb_hub *rhub = ohci2hcd(ohcd)->root_hub;
-
 		OHCI_WRITE(ohcd, &ohcd->base->hc_intstat, OHCI_INTERRUPT_RHUB);
-
-		for (int i = 0; i < rhub->port_n; i++) {
-			uint32_t port_stat = OHCI_READ(ohcd, &ohcd->base->hc_rh_port_stat[i]);
-
-			rhub->ports[i].status = ohci_port_stat_map(port_stat & 0xffff);
-			rhub->ports[i].changed = ohci_port_stat_map(port_stat >> 16);
-
-			if (port_stat >> 16) {
-				OHCI_WRITE(ohcd, &ohcd->base->hc_rh_port_stat[i],
-						port_stat & 0xffff0000);
-			}
-		}
-
-		usb_rh_nofity(hcd);
 	}
 
 	if (intr_stat & OHCI_INTERRUPT_DONE_QUEUE) {
 		struct ohci_td *td, *next_td;
-		struct usb_request *req;
+		struct ohci_request_priv *priv;
+		struct ohci_ed *ed;
 
-                td = (struct ohci_td *) (REG_LOAD(&ohcd->hcca->done_head) & ~1);
+		td = (struct ohci_td *) (REG_LOAD(&ohcd->hcca->done_head) & ~1);
 
 		do {
 			req = ohci2req(td);
@@ -538,13 +589,25 @@ static irq_return_t ohci_irq(unsigned int irq_nr, void *data) {
 			assert(req);
 
 			req->req_stat = ohci_td_stat(td);
-			req->len = ohci_td_received_len(td, req);
+			req->actual_len += ohci_td_received_len(td, req);
 			next_td = ohci_td_next(td);
 
 			ohci_td_free(td);
 
-			usb_request_complete(req);
+			priv = req->hci_specific;
+			priv->tds_count--;
+			if (!priv->tds_count) {
+				ed = endp2ohci(req->endp);
 
+				pool_free(&ohci_req_priv_pool, priv);
+				usb_queue_del(&ed->req_queue, &req->req_link);
+				usb_request_complete(req);
+
+				if (!usb_queue_empty(&ed->req_queue)) {
+					req = usb_link2req(usb_queue_first(&ed->req_queue));
+					ohci_request_do(req);
+				}
+			}
 		} while ((td = next_td));
 
 		OHCI_WRITE(ohcd, &ohcd->base->hc_intstat, OHCI_INTERRUPT_DONE_QUEUE);
@@ -565,6 +628,10 @@ static int ohci_pci_init(struct pci_slot_dev *pci_dev) {
 	struct usb_hcd *hcd;
 	int ret;
 
+	base = (struct ohci_reg *)mmap_device_memory(base, 0x1000,
+			PROT_WRITE | PROT_READ,
+			MAP_FIXED,
+			(uintptr_t)base);
 	if (!ohci_verify(base)) {
 		return -ENOTSUP;
 	}

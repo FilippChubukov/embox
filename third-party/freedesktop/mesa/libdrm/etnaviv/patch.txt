@@ -324,3 +324,65 @@ diff -aur libdrm-2.4.96-orig/xf86drm.c libdrm-2.4.96/xf86drm.c
      }
      node_count = i;
  
+--- libdrm-2.4.96-orig/build-aux/ltmain.sh	2018-10-16 17:49:10.000000000 +0300
++++ libdrm-2.4.96/build-aux/ltmain.sh	2018-12-26 13:38:36.446796112 +0300
+@@ -7008,47 +7008,6 @@
+ 	continue
+ 	;;
+ 
+-      -l*)
+-	if test X-lc = "X$arg" || test X-lm = "X$arg"; then
+-	  case $host in
+-	  *-*-cygwin* | *-*-mingw* | *-*-pw32* | *-*-beos* | *-cegcc* | *-*-haiku*)
+-	    # These systems don't actually have a C or math library (as such)
+-	    continue
+-	    ;;
+-	  *-*-os2*)
+-	    # These systems don't actually have a C library (as such)
+-	    test X-lc = "X$arg" && continue
+-	    ;;
+-	  *-*-openbsd* | *-*-freebsd* | *-*-dragonfly* | *-*-bitrig*)
+-	    # Do not include libc due to us having libc/libc_r.
+-	    test X-lc = "X$arg" && continue
+-	    ;;
+-	  *-*-rhapsody* | *-*-darwin1.[012])
+-	    # Rhapsody C and math libraries are in the System framework
+-	    func_append deplibs " System.ltframework"
+-	    continue
+-	    ;;
+-	  *-*-sco3.2v5* | *-*-sco5v6*)
+-	    # Causes problems with __ctype
+-	    test X-lc = "X$arg" && continue
+-	    ;;
+-	  *-*-sysv4.2uw2* | *-*-sysv5* | *-*-unixware* | *-*-OpenUNIX*)
+-	    # Compiler inserts libc in the correct place for threads to work
+-	    test X-lc = "X$arg" && continue
+-	    ;;
+-	  esac
+-	elif test X-lc_r = "X$arg"; then
+-	 case $host in
+-	 *-*-openbsd* | *-*-freebsd* | *-*-dragonfly* | *-*-bitrig*)
+-	   # Do not include libc_r directly, use -pthread flag.
+-	   continue
+-	   ;;
+-	 esac
+-	fi
+-	func_append deplibs " $arg"
+-	continue
+-	;;
+-
+       -mllvm)
+ 	prev=mllvm
+ 	continue
+diff -aur libdrm-2.4.96-orig/etnaviv/etnaviv_bo.c libdrm-2.4.96/etnaviv/etnaviv_bo.c
+--- libdrm-2.4.96-orig/etnaviv/etnaviv_bo.c	2019-03-04 12:52:04.044351386 +0300
++++ libdrm-2.4.96/etnaviv/etnaviv_bo.c	2019-05-20 16:47:49.056151472 +0300
+@@ -314,7 +314,7 @@
+ 			get_buffer_info(bo);
+ 		}
+ 
+-		bo->map = drm_mmap(0, bo->size, PROT_READ | PROT_WRITE,
++		bo->map = drm_mmap(0, bo->size, PROT_READ | PROT_WRITE | PROT_NOCACHE,
+ 				MAP_SHARED, bo->dev->fd, bo->offset);
+ 		if (bo->map == MAP_FAILED) {
+ 			ERROR_MSG("mmap failed: %s", strerror(errno));

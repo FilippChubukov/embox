@@ -6,6 +6,7 @@
  * @date    02.06.2014
  */
 
+#include <stdlib.h>
 #include <string.h>
 #include <framework/cmd/api.h>
 #include <cmd/shell.h>
@@ -16,6 +17,8 @@
 #include <kernel/task/resource/task_argv.h>
 #include <kernel/task/resource.h>
 #include <hal/vfork.h>
+
+#include <errno.h>
 
 static const char * exec_cmd_name(const char *path) {
 	size_t path_len;
@@ -60,13 +63,11 @@ int exec_call(void) {
 			task_self_module_ptr_set(cmd2mod(cmd));
 			ecode = cmd_exec(cmd, c, v);
 		} else {
-			ecode = ENOENT;
+			ecode = -ENOENT;
+			errno = ENOENT;
 		}
 	}
 
-	if (ecode == 0) {
-		task_exit(0);
-	}
 	return ecode;
 }
 
@@ -105,6 +106,9 @@ int execv(const char *path, char *const argv[]) {
 			}
 			strncat(cmd_name, " ", MAX_TASK_NAME_LEN - len - 1);
 		}
+	} else {
+		strncpy(cmd_name, path, MAX_TASK_NAME_LEN - 1);
+		cmd_name[MAX_TASK_NAME_LEN - 1] = '\0';
 	}
 
 	task_set_name(task, cmd_name);
@@ -113,12 +117,40 @@ int execv(const char *path, char *const argv[]) {
 	vfork_child_done(task, task_exec_callback, NULL);
 
 	/* Not vforked */
-	exec_call();
+	int ecode = exec_call();
+
+	if (ecode == 0) {
+		task_exit(0);
+	}
+	return -1;
+
+}
+
+static int switch_env(char *const envp[]) {
+	int rc = 0;
+
+	if (!envp)
+		return 0;
+
+	clearenv();
+
+	while (*envp != NULL) {
+		rc = putenv(*envp);
+		if (rc != 0)
+			return rc;
+		envp++;
+	}
 
 	return 0;
 }
 
 int execve(const char *path, char *const argv[], char *const envp[]) {
+	int rc = 0;
+
+	rc = switch_env(envp);
+	if (rc != 0)
+		return rc;
+
 	return execv(path, argv);
 }
 

@@ -7,6 +7,7 @@ module all {
 	depends passwd
 	depends inttypes_test
 	depends libgen_test
+	depends memccpy_test
 	depends poll_test
 	depends select_test
 	depends pipe_test
@@ -15,6 +16,15 @@ module all {
 	depends sleep_test
 	depends sigchld_test
 	depends waitpid_test
+	depends utime_test
+	depends strcoll_test
+	depends strxfrm_test
+}
+
+module utime_test {
+	source "utime_test.c"
+	depends embox.compat.posix.utime
+	depends embox.fs.driver.ramfs /* for creat() and close() */
 }
 
 module environ_test {
@@ -53,6 +63,12 @@ module libgen_test {
 	source "libgen_test.c"
 
 	depends embox.compat.libc.int_types
+}
+
+module memccpy_test {
+	source "memccpy_test.c"
+
+	depends embox.compat.libc.all
 }
 
 module poll_test {
@@ -126,3 +142,26 @@ module waitpid_test {
 	depends embox.compat.posix.proc.waitpid
 }
 
+module fnmatch_test {
+	source "fnmatch_test.c"
+
+	depends embox.compat.posix.fnmatch
+}
+
+module strcoll_test {
+	source "strcoll_test.c"
+
+	depends embox.compat.libc.all
+}
+
+module strxfrm_test {
+	source "strxfrm_test.c"
+
+	depends embox.compat.libc.all
+}
+
+module sem_test {
+	source "sem_test.c"
+
+	depends embox.compat.posix.semaphore
+}

@@ -42,9 +42,9 @@ struct super_block *rootfs_sb(void) {
  */
 static int rootfs_mount(void) {
 	const char *dev, *fs_type;
-	const struct dumb_fs_driver *fsdrv;
+	const struct fs_driver *fsdrv;
 	const struct auto_mount *auto_mnt;
-	struct lookup lu;
+	struct lookup lu = {};
 	char *tmp;
 	int err;
 
@@ -52,7 +52,7 @@ static int rootfs_mount(void) {
 	fs_type = OPTION_STRING_GET(fstype);
 	assert(fs_type);
 
-	fsdrv = dumb_fs_driver_find(fs_type);
+	fsdrv = fs_driver_find(fs_type);
 	if (fsdrv == NULL)
 		return -ENOENT;
 
@@ -74,7 +74,7 @@ static int rootfs_mount(void) {
 		if (lu.item == NULL) {
 			tmp = strrchr(auto_mnt->mount_path, '/');
 			dvfs_create_new(tmp ? tmp + 1: auto_mnt->mount_path,
-					&lu, DVFS_DIR_VIRTUAL | S_IFDIR);
+					&lu, VFS_DIR_VIRTUAL | S_IFDIR);
 		}
 		dvfs_mount(NULL, auto_mnt->mount_path, auto_mnt->fs_driver->name, 0);
 	}

@@ -7,7 +7,7 @@ module vga extends embox.driver.diag.diag_api {
 	source "vc_vga.h"
 
 	depends embox.driver.tty.vterm_video
-	depends embox.mem.vmem_api
+	depends embox.compat.posix.sys.mman.mmap_api
 }
 
 module vc {
@@ -15,6 +15,8 @@ module vc {
 
 	@IncludeExport(path="drivers/console/vc")
 	source "vc_vga.h"
+
+	option number vc_quantity = 1
 
 	depends vga
 	depends embox.driver.tty.vterm

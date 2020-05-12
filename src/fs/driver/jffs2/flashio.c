@@ -16,16 +16,17 @@
 #include "nodelist.h"
 
 #include <drivers/block_dev.h>
-#include <drivers/block_dev/flash/flash.h>
+#include <drivers/flash/flash.h>
 #include <drivers/block_dev.h>
+#include <fs/super_block.h>
 #include <mem/sysmalloc.h>
 
 bool jffs2_flash_read(struct jffs2_sb_info * c,
 		uint32_t read_buffer_offset, const size_t size,
 			  size_t * return_size, unsigned char *write_buffer) {
 	int err;
-	struct super_block *sb;
-	sb = member_cast_out(c, struct super_block, jffs2_sb);
+	struct jffs2_super_block *sb;
+	sb = member_cast_out(c, struct jffs2_super_block, jffs2_sb);
 
 	err = block_dev_read_buffered(sb->bdev,
 			(char *) write_buffer, size, read_buffer_offset);
@@ -42,9 +43,9 @@ bool jffs2_flash_write(struct jffs2_sb_info * c,
 		uint32_t write_buffer_offset, const size_t size,
 		size_t * return_size, unsigned char *read_buffer) {
 	int err;
-	struct super_block *sb;
+	struct jffs2_super_block *sb;
 
-	sb = member_cast_out(c, struct super_block, jffs2_sb);
+	sb = member_cast_out(c, struct jffs2_super_block, jffs2_sb);
 	err = block_dev_write_buffered(sb->bdev,
 	(char *) read_buffer, size, write_buffer_offset);
 
@@ -148,18 +149,18 @@ int jffs2_flash_direct_writev(struct jffs2_sb_info *c, const struct iovec *vecs,
 
 bool jffs2_flash_erase(struct jffs2_sb_info * c,
 			   struct jffs2_eraseblock * jeb) {
-	flash_getconfig_erase_t e;
+	flash_ioctl_erase_t e;
 	uint32_t err_addr;
 	int err;
 	uint32_t len = sizeof (e);
-	struct super_block *sb;
-	sb = member_cast_out(c, struct super_block, jffs2_sb);
+	struct jffs2_super_block *sb;
+	sb = member_cast_out(c, struct jffs2_super_block, jffs2_sb);
 
 	e.offset = jeb->offset;
 	e.len = c->sector_size;
 	e.err_address = (uint32_t) &err_addr;
 
-	err = block_dev_ioctl(sb->bdev, GET_CONFIG_FLASH_ERASE, &e, len);
+	err = block_dev_ioctl(sb->bdev, FLASH_IOCTL_ERASE, &e, len);
 
 	return (err != ENOERR || e.flasherr != 0);
 }

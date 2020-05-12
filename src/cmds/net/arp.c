@@ -31,10 +31,9 @@ static int print_arp_entity(const struct neighbour *n,
 	assert(n != NULL);
 
 	if ((in_dev == NULL) || (in_dev->dev == n->dev)) {
-		if (!n->incomplete) {
+		if (neighbour_is_resolved(n)) {
 			macaddr_print(hw_addr, &n->haddr[0]);
-		}
-		else {
+		} else {
 			sprintf((char *)hw_addr, "%s", "(incomplete)");
 		}
 		printf("%-15s %-6s  %-17s %-5s %-5s\n",
@@ -58,7 +57,6 @@ int main(int argc, char **argv) {
 	unsigned char hwaddr[ETH_ALEN];
 	struct in_device *ifdev = NULL;
 
-	getopt_init();
 	while (-1 != (opt = getopt(argc, argv, "hd:s:a:m:i:"))) {
 		switch (opt) {
 		case 'd':
@@ -91,7 +89,7 @@ int main(int argc, char **argv) {
 				return -EINVAL;
 			}
 			//TODO checked interface and use default
-			return neighbour_add(ETH_P_IP, &addr, sizeof addr, ifdev->dev,
+			return neighbour_add(ntohs(ETH_P_IP), &addr, sizeof addr, ifdev->dev,
 					ARP_HRD_ETHERNET, &hwaddr[0], sizeof hwaddr, NEIGHBOUR_FLAG_PERMANENT);
 		case 'i':
 			if (NULL == (ifdev = inetdev_get_by_name(optarg))) {

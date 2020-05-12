@@ -10,6 +10,10 @@
 "export HOME=/",
 "export TCL_LIBRARY=/",
 
+"mkdir -v /tmp",
+"mkfs -q /dev/ram0 8192",
+"mount -t ramfs  /dev/ram0 /tmp",
+
 "tinypy fib.py",
 
 "chibi-scheme -xscheme fib.scm",
@@ -18,9 +22,9 @@
 
 "lua fib.lua",
 "lua doit.lua",
-"lua tofi_mod.lua new_file.txt",
-"cat new_file.txt",
-//"lua http_request.lua http://habrahabr.ru",
+"lua tofi_mod.lua /tmp/new_file.txt",
+"cat /tmp/new_file.txt",
+"lua http_request.lua http://example.com",
 "tclsh run_embox_cmd.tcl",
 "tclsh fib.tcl",
 "tclsh tcludp_localhost.tcl",

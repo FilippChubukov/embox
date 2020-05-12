@@ -137,6 +137,39 @@ extern int strcmp(const char *str1, const char *str2);
  */
 extern int strncmp(const char *str1, const char *str2, size_t n);
 
+/** 
+ * Compare two strings using C locale.
+ * @param s1
+ *   The first string.
+ * @param s2
+ *   The second string.
+ * @return
+ *   Comparison result using LC_COLLATE=C.
+ * @retval 0
+ *   If the strings are equal.
+ * @retval positive
+ *   If @a s1 is greater than @a s2.
+ * @retval negative
+ *   If @a s1 is less than @a s2.
+ * Throw assert if character is not ASCII.
+ */
+extern int strcoll(const char *s1, const char *s2);
+
+/**
+ * Copy no more than n symbols from src to dest in such way that
+ * strcmp with modified strings works in the same way as strcoll.
+ * @param dest
+ *   Destination string.
+ * @param s2
+ *   Source string.
+ * @return
+ *   Number of bytes required to store the transformed string in
+ *   dest excluding the terminating null byte ('\0').
+ * @retval 0
+ * Throw assert if character is not ASCII.
+ */
+extern size_t strxfrm(char *dest, const char *src, size_t n);
+
 /**
  * Finds the first occurrence of the character @a ch (converted to a @c char)
  * in the given null-terminated string.
@@ -226,6 +259,30 @@ extern char *strcasestr(const char *haystack, const char *needle);
  *   C-style string, containing a descriptive error message
  */
 extern char *strerror(int err);
+
+/**
+ * Copies no more than @a n bytes from memory area @a src
+ * to memory area @a dest,
+ * stopping when the character @a c is found.
+ * 
+ * @param dest
+ *  Destination buffer
+ * @param src
+ *  The object in memory being copied
+ * @param n
+ *  The number of bytes to copy
+ * @param c
+ *  Character to stop copying when found.
+ * @return
+ *  Pointer to the destination buffer.
+ * 
+ * @note
+ *  If the memory areas overlap, the results are undefined.
+ * @see memcpy()
+ *  It does the same thing, but it doesn't stop at c.
+ */
+extern void* memccpy(void* dest, const void* src, int c, size_t n);
+
 
 /**
  * Copies @a n bytes from @a src to @a dst which must be two non-overlapping

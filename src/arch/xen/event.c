@@ -1,9 +1,8 @@
 #include <stdint.h>
 #include <xen/xen.h>
-#include <xen/event.h>
 
-// headers below have xen_ prefix added to name 
-#include <xen_barrier.h>
+#include <barrier.h>
+#include <traps.h>
 
 #if defined(__i386__)
 #include <xen_hypercall-x86_32.h>
@@ -12,6 +11,9 @@
 #else
 #error "Unsupported architecture"
 #endif
+
+#include <assert.h>
+#include <kernel/irq.h>
 
 #define NUM_CHANNELS (1024)
 
@@ -24,43 +26,6 @@
 extern shared_info_t xen_shared_info;
 void hypervisor_callback(void);
 void failsafe_callback(void);
-
-
-static evtchn_handler_t handlers[NUM_CHANNELS];
-
-void EVT_IGN(evtchn_port_t port, struct pt_regs * regs) {};
-
-/* Initialise the event handlers */
-void init_events(void)
-{
-	/* Set the event delivery callbacks */
-#ifdef __i386__
-	HYPERVISOR_set_callbacks(
-		FLAT_KERNEL_CS, (unsigned long)hypervisor_callback,
-		FLAT_KERNEL_CS, (unsigned long)failsafe_callback);
-#elif defined (__x86_64__)
-	HYPERVISOR_set_callbacks(
-		(unsigned long)hypervisor_callback,
-		(unsigned long)failsafe_callback, 0);
-#else
-#error "Unsupported architecture"
-#endif
-	/* Set all handlers to ignore, and mask them */
-	for(unsigned int i=0 ; i<NUM_CHANNELS ; i++)
-	{
-		handlers[i] = EVT_IGN;
-		SET_BIT(i,xen_shared_info.evtchn_mask[0]);
-	}
-	/* Allow upcalls. */
-	xen_shared_info.vcpu_info[0].evtchn_upcall_mask = 0;
-}
-
-/* Register an event handler and unmask the port */
-void register_event(evtchn_port_t port, evtchn_handler_t handler)
-{
-	handlers[port] = handler;
-	CLEAR_BIT(xen_shared_info.evtchn_mask, port);
-}
 
 static inline unsigned long int first_bit(unsigned long int word)
 {
@@ -97,6 +62,25 @@ static inline unsigned long int xchg(unsigned long int * old, unsigned long int 
 	return value;
 }
 
+static void handle(int irq) {
+	assert(!critical_inside(CRITICAL_IRQ_LOCK));
+
+	irqctrl_disable(irq);
+	irqctrl_eoi(irq);
+	critical_enter(CRITICAL_IRQ_HANDLER);
+	{
+		ipl_enable();
+
+		irq_dispatch(irq);
+
+		ipl_disable();
+
+	}
+	irqctrl_enable(irq);
+	critical_leave(CRITICAL_IRQ_HANDLER);
+	critical_dispatch_pending();
+}
+
 /* Dispatch events to the correct handlers */
 void do_hypervisor_callback(struct pt_regs *regs)
 {
@@ -127,9 +111,7 @@ void do_hypervisor_callback(struct pt_regs *regs)
 			/* Combine the two offsets to get the port */
 			evtchn_port_t port = (pending_selector << 5) + event_offset;
 			/* Handler the event */
-			handlers[port](port, regs);
-			/* Clear the pending flag */
-			CLEAR_BIT(xen_shared_info.evtchn_pending[0], event_offset);
+			handle(port);
 		}
 	}
 }

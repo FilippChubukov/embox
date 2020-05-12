@@ -2,10 +2,7 @@
 PKG_NAME := libdrm
 PKG_VER  := 2.4.96
 
-PKG_ARCHIVE_NAME := $(PKG_NAME)-$(PKG_VER).tar.gz
-
-
-PKG_SOURCES := https://dri.freedesktop.org/libdrm/$(PKG_ARCHIVE_NAME)
+PKG_SOURCES := https://dri.freedesktop.org/libdrm/$(PKG_NAME)-$(PKG_VER).tar.gz
 
 PKG_MD5     := dd0a89154ee3d60c37ee5b8099979875
 
@@ -19,6 +16,7 @@ $(CONFIGURE) :
 		./configure --host=$(AUTOCONF_TARGET_TRIPLET) \
 			--enable-etnaviv-experimental-api \
 			--enable-static \
+			--disable-dependency-tracking \
 			--disable-shared \
 			--disable-tegra-experimental-api \
 			--disable-vmwgfx \

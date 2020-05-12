@@ -3,9 +3,7 @@
 PKG_NAME := mesa
 PKG_VER  := 18.2.5
 
-PKG_ARCHIVE_NAME := $(PKG_NAME)-$(PKG_VER).tar.xz
-
-PKG_SOURCES := https://mesa.freedesktop.org/archive/$(PKG_ARCHIVE_NAME)
+PKG_SOURCES := https://mesa.freedesktop.org/archive/$(PKG_NAME)-$(PKG_VER).tar.xz
 
 PKG_MD5     := b31a43ebb8b37fb704a9a75c90bbd71b
 
@@ -19,13 +17,12 @@ MESA_CPPFLAGS += -I$(SRC_DIR)/compat/libc/include -I$(SRC_DIR)/compat/posix/incl
 MESA_CPPFLAGS += -I$(SRC_DIR)/arch/$(ARCH)/include
 MESA_CPPFLAGS += -I$(SRC_DIR)/arch/$(ARCH)/include -I$(SRC_DIR)/../build/extbld/third_party/freedesktop/mesa/libdrm_etnaviv/libdrm-2.4.96/
 MESA_CPPFLAGS += -I$(SRC_DIR)/../build/extbld/third_party/freedesktop/mesa/libdrm_etnaviv/libdrm-2.4.96/include/drm/
-MESA_CPPFLAGS += -I$(SRC_DIR)/../build/extbld/third_party/freedesktop/mesa/libdrm_etnaviv/libdrm-2.4.96/etnaviv
+MESA_CPPFLAGS += -I$(SRC_DIR)/../build/extbld/third_party/freedesktop/mesa/libdrm_etnaviv/libdrm-2.4.96/etnaviv -std=gnu++11 -DHAVE_FUNC_ATTRIBUTE_WEAK
 
 $(CONFIGURE) :
 	export EMBOX_GCC_LINK=full; \
 	export PKG_CONFIG_PATH=$(ROOT_DIR)/build/extbld/third_party/freedesktop/mesa/libdrm_etnaviv/libdrm-2.4.96:$(ROOT_DIR)/build/extbld/third_party/freedesktop/mesa/libdrm_etnaviv/libdrm-2.4.96/etnaviv;\
 	cd $(PKG_SOURCE_DIR) && aclocal && autoconf &&( \
-		patch configure -p0 < $(SRC_DIR)/../third-party/freedesktop/mesa/mesa/mesa_etnaviv/configure.patch;\
 		./configure --host=$(AUTOCONF_TARGET_TRIPLET) \
 			--target=$(AUTOCONF_TARGET_TRIPLET) \
 			--enable-static  --disable-shared \
@@ -41,7 +38,7 @@ $(CONFIGURE) :
 			--disable-glx --disable-glx-tls \
 			--disable-asm \
 			--disable-dependency-tracking \
-			--disable-gles1 --disable-gles2 \
+			--enable-gles1 --enable-gles2 \
 			--disable-xvmc \
 			ZLIB_LIBS="-O2" \
 			PTHREADSTUBS_LIBS="-O2" \
@@ -49,7 +46,7 @@ $(CONFIGURE) :
 			HAVE_GALLIUM_SOFTWARE_PIPE=yes \
 			CC=$(EMBOX_GCC) \
 			CXX=$(EMBOX_GXX) \
-			CPPFLAGS='$(MESA_CPPFLAGS) -DGALLIUM_ETNAVIV' \
+			CPPFLAGS='$(MESA_CPPFLAGS) -DGALLIUM_ETNAVIV -DHAVE_PTHREADS' \
 	)
 	touch $@
 

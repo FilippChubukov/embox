@@ -10,9 +10,12 @@
 #include <errno.h>
 #include <security/security.h>
 
+#include <fs/fs_driver.h>
+#include <fs/vfs.h>
+#include <fs/inode.h>
 #include <fs/xattr.h>
 
-static int check_fsop(struct node *node, const struct fsop_desc **fsop) {
+static int check_fsop(struct inode *node, const struct fsop_desc **fsop) {
 	if (!node) {
 		return -ENOENT;
 	}
@@ -25,19 +28,19 @@ static int check_fsop(struct node *node, const struct fsop_desc **fsop) {
 		return -EINVAL;
 	}
 
-	if (!node->nas->fs->drv) {
+	if (!node->nas->fs->fs_drv) {
 		return -EINVAL;
 	}
 
-	if (!node->nas->fs->drv->fsop) {
+	if (!node->nas->fs->fs_drv->fsop) {
 		return -EINVAL;
 	}
 
-	*fsop = node->nas->fs->drv->fsop;
+	*fsop = node->nas->fs->fs_drv->fsop;
 	return 0;
 }
 
-int kfile_xattr_get(struct node *node, const char *name, char *value, size_t len) {
+int kfile_xattr_get(struct inode *node, const char *name, char *value, size_t len) {
 	const struct fsop_desc *fsop;
 	int err;
 
@@ -56,7 +59,7 @@ int kfile_xattr_get(struct node *node, const char *name, char *value, size_t len
 	return err;
 }
 
-int kfile_xattr_set(struct node *node, const char *name,
+int kfile_xattr_set(struct inode *node, const char *name,
 			const char *value, size_t len, int flags) {
 	const struct fsop_desc *fsop;
 	int err;
@@ -80,7 +83,7 @@ int kfile_xattr_set(struct node *node, const char *name,
 	return err;
 }
 
-int kfile_xattr_list(struct node *node, char *list, size_t len) {
+int kfile_xattr_list(struct inode *node, char *list, size_t len) {
 	const struct fsop_desc *fsop;
 	int err;
 

@@ -60,27 +60,26 @@ static int send_request(struct net_device *dev, uint16_t pro,
 			ARP_OP_REQUEST, &dev->dev_addr[0], spa,
 			&dev->broadcast[0], tpa);
 
-	return net_tx(skb, NULL);
+	return net_tx_direct(skb);
 }
 
 int main(int argc, char **argv) {
 	int opt;
 	int cnt = 4, cnt_resp = 0, i;
-	struct in_device *in_dev = inetdev_get_by_name("eth0");
+	struct in_device *in_dev;
+	char *if_name = "eth0";
 	struct in_addr dst;
 	char dst_b[] = "xxx.xxx.xxx.xxx";
 	char from_b[] = "xxx.xxx.xxx.xxx";
 	struct in_addr from;
 	unsigned char mac[18], hw_addr[ETH_ALEN];
+	struct timeval t1, t2, sub_res;
+	int ret, microseconds, milliseconds;
 
-	getopt_init();
 	while (-1 != (opt = getopt(argc, argv, "I:c:h"))) {
 		switch (opt) {
 		case 'I': /* get interface */
-			if (NULL == (in_dev = inetdev_get_by_name(optarg))) {
-				printf("arping: unknown iface %s\n", optarg);
-				return -EINVAL;
-			}
+			if_name = optarg;
 			break;
 		case 'c': /* get ping cnt */
 			if (1 != sscanf(optarg, "%d", &cnt)) {
@@ -104,6 +103,17 @@ int main(int argc, char **argv) {
 		return 0;
 	}
 
+	in_dev = inetdev_get_by_name(if_name);
+	if (NULL == in_dev) {
+		printf("arping: unknown iface %s\n", if_name);
+		return -EINVAL;
+	}
+
+	if (in_dev->dev->flags & (IFF_LOOPBACK | IFF_NOARP)) {
+		printf("arping: iface %s don't support ARP\n", if_name);
+		return -EINVAL;
+	}
+
 	/* Get destination address. */
 	if (0 == inet_aton(argv[argc - 1], &dst)) {
 		printf("arping: invalid IP address: %s\n", argv[argc - 1]);
@@ -114,15 +124,41 @@ int main(int argc, char **argv) {
 	from.s_addr = in_dev->ifa_address;
 	strncpy(from_b, inet_ntoa(from), sizeof(from_b) - 1);
 	printf("ARPING %s from %s %s\n", dst_b, from_b, in_dev->dev->name);
+
 	for (i = 1; i <= cnt; i++) {
 		neighbour_del(ETH_P_IP, &dst, in_dev->dev);
+
+		usleep(DEFAULT_INTERVAL);
+
+		if (gettimeofday(&t1, NULL) == -1) {
+			return -1;
+		}
+
 		send_request(in_dev->dev, ETH_P_IP, sizeof in_dev->ifa_address,
 				&in_dev->ifa_address, &dst.s_addr);
-		usleep(DEFAULT_INTERVAL);
-		if (0 == neighbour_get_haddr(ETH_P_IP, &dst, in_dev->dev,
-					ARP_HRD_ETHERNET, sizeof hw_addr, &hw_addr[0])) {
+
+		/* Repeat until neigbour_get_haddr returns 0 or one second
+		 * (default interval) has passed.
+		 */
+		do {
+			ret = neighbour_get_haddr(ETH_P_IP, &dst, in_dev->dev,
+								ARP_HRD_ETHERNET, sizeof hw_addr, &hw_addr[0]);
+			if (gettimeofday(&t2, NULL) == -1) {
+				return -1;
+			}
+			timersub(&t2, &t1, &sub_res);
+		} while (ret != 0 && sub_res.tv_sec < 1);
+
+		if (ret == 0 && sub_res.tv_sec < 1){
 			macaddr_print(mac, hw_addr);
-			printf("Unicast reply from %s [%s]  %dms\n", dst_b, mac, 0);
+
+			/* To avoid doing floating point arithmetic. */
+			microseconds = sub_res.tv_usec;
+			milliseconds = microseconds / 1000;
+			microseconds = microseconds % 1000;
+
+			printf("Unicast reply from %s [%s]  %d.%03dms\n",
+			dst_b, mac, milliseconds, microseconds);
 			cnt_resp++;
 		}
 	}
@@ -131,3 +167,4 @@ int main(int argc, char **argv) {
 
 	return 0;
 }
+

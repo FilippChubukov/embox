@@ -32,6 +32,8 @@
 #include <framework/cmd/api.h>
 #include <embox/unit.h>
 
+#include <mem/sysmalloc.h>
+
 #include <kernel/task.h>
 #include <kernel/task/resource/module_ptr.h>
 
@@ -173,7 +175,7 @@ static void * run_cmd(void *data) {
 	if (ret != 0) {
 		printf("%s: Command returned with code %d: %s\n",
 				cmd_name(cdata.cmd), ret, strerror(-ret));
-		return (void *)ret; /* error: ret */
+		return (void *) (uintptr_t) ret; /* error: ret */
 	}
 
 	return NULL; /* ok */
@@ -384,7 +386,8 @@ static void tish_run(void) {
 
 		tish_collect_bg_childs();
 
-		free(line);
+		/* TODO now linenoise use sysalloc for memory allocation */
+		sysfree(line);
 	}
 }
 

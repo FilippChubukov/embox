@@ -2,7 +2,9 @@
 PKG_NAME := zlib
 PKG_VER  := 1.2.8
 
-PKG_SOURCES := http://zlib.net/fossils/$(PKG_NAME)-$(PKG_VER).tar.gz
+PKG_SOURCES := http://zlib.net/fossils/$(PKG_NAME)-$(PKG_VER).tar.gz \
+	http://download.embox.rocks/$(PKG_NAME)-$(PKG_VER).tar.gz
+
 PKG_MD5     := 44d667c142d7cda120332623eab69f40
 
 include $(EXTBLD_LIB)
@@ -24,5 +26,7 @@ $(INSTALL) :
 	cd $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VER)/ && ( \
 		cp minigzip $(PKG_INSTALL_DIR)/minigzip.o; \
 		cp libz.a $(PKG_INSTALL_DIR); \
+		cp zlib.h $(INCUDE_INSTALL_DIR); \
+		cp zconf.h $(INCUDE_INSTALL_DIR); \
 	)
 	touch $@

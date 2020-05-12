@@ -53,6 +53,8 @@
 #define OHCI_RH_R_PWR_W_STPWR         0x0100
 #define OHCI_RH_R_LOWSPD_W_CLPWR      0x0200
 
+#define OHCI_RH_PS_CSC   (1 << 16)   /* connect status change */
+
 #define OHCI_TD_SETUP                 0x00000000
 #define OHCI_TD_OUT                   0x00080000
 #define OHCI_TD_IN                    0x00100000
@@ -121,13 +123,12 @@ struct ohci_reg {
 	uint32_t hc_rh_desc_b;
 	uint32_t hc_rh_stat;
 	uint32_t hc_rh_port_stat[];
-} __attribute__((packed));
+} __attribute__((packed,aligned(sizeof(uint32_t))));
 
 struct ohci_hcd {
 	struct usb_hcd *hcd;
 	struct ohci_hcca *hcca;
 	struct ohci_reg *base;
-
 };
 
 static inline struct usb_hcd *ohci2hcd(struct ohci_hcd *ohcd) {
@@ -143,6 +144,9 @@ struct ohci_ed {
 	uint32_t tail_td;
 	uint32_t head_td;
 	uint32_t next_ed;
+
+	/* it's not hardware field, must be the last */
+	struct usb_queue req_queue;
 } __attribute__((packed,aligned(16)));
 
 

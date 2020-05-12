@@ -1,64 +1,75 @@
 /**
- * @file
- * @brief
- *
- * @author Ilia Vaprol
- * @date 31.03.13
- */
+* @file
+* @brief
+*
+* @author Denis Deryugin
+* @date 3 Apr 2015
+*/
 
-#include <assert.h>
+#include <errno.h>
 #include <errno.h>
 #include <stdlib.h>
-#include <string.h>
-#include <limits.h>
-#include <unistd.h>
 
-#include <fs/vfs.h>
-#include <fs/hlpr_path.h>
-#include <fs/fs_driver.h>
-#include <fs/kfsop.h>
-#include <fs/perm.h>
+#include <fs/inode.h>
+#include <fs/dentry.h>
+#include <kernel/task/resource/vfs.h>
+#include <util/log.h>
 
+/**
+* @brief POSIX-compatible function changing process working directory
+*
+* @param path Path to new working directory
+*
+* @return On success, 0 returned, otherwise -1 returned and ERRNO is set
+*	 appropriately.
+*/
 int chdir(const char *path) {
-	struct path last;
-	struct stat buff;
-	char strbuf[PATH_MAX] = "";
+	struct lookup l = { NULL, NULL };
+	int err;
+	char new_pwd[PATH_MAX - 1];
+	struct task_vfs *t;
 
-	if ((path == NULL) || (*path == '\0')) {
+	if (path == NULL) {
 		SET_ERRNO(ENOENT);
 		return -1;
 	}
 
-	if (path[0] != '/') {
-		strncpy(strbuf, getenv("PWD"), PATH_MAX - 1);
-		strbuf[PATH_MAX - 1] = '\0';
-		strcat(strbuf, "/");
+	if ((err = dvfs_lookup(path, &l))) {
+		return SET_ERRNO(-err);
 	}
-	strncat(strbuf, path, PATH_MAX - 1);
-	strbuf[PATH_MAX - 1] = '\0';
 
-	if (strlen(path) >= PATH_MAX - 1) {
+	if (l.item == NULL) {
+		return SET_ERRNO(ENOENT);
+	}
+
+	if (!(l.item->flags & S_IFDIR)) {
+		dentry_ref_dec(l.item);
+		return SET_ERRNO(ENOTDIR);
+	}
+
+	dentry_full_path(l.item, new_pwd);
+
+	dentry_ref_dec(l.item);
+
+	if (-1 == setenv("PWD", new_pwd, 1)) {
 		SET_ERRNO(ENAMETOOLONG);
 		return -1;
 	}
 
-	/*check if such path exists in fs*/
-	if(0 != fs_perm_lookup(path, NULL, &last)){
-		SET_ERRNO(ENOENT);
-		return -1;
+	if ((t = task_fs()) == NULL) {
+		log_error("task VFS structure is NULL");
+		return SET_ERRNO(EIO);
 	}
 
-	/*check if it is a directory*/
-	kfile_fill_stat(last.node, &buff);
-	if(!S_ISDIR(buff.st_mode)){
-		SET_ERRNO(ENOTDIR);
-		return -1;
+	if (t->pwd != l.item) {
+		dentry_ref_dec(t->pwd);
+		t->pwd = l.item;
+		dentry_ref_inc(t->pwd);
 	}
 
-	if (-1 == setenv("PWD", strbuf, 1)) {
-		assert(errno == ENOMEM); /* it is the only possible error */
-		SET_ERRNO(ENAMETOOLONG);
-		return -1;
+	if (-1 == setenv("PWD", new_pwd, 1)) {
+		assert(errno == ENOMEM);
+		return SET_ERRNO(ENAMETOOLONG);
 	}
 
 	return 0;

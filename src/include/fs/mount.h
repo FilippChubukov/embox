@@ -11,13 +11,14 @@
 
 #include <util/dlist.h>
 
-struct node;
+struct inode;
 struct path;
+struct block_dev;
 
 #define MOUNT_DESC_STRINFO_LEN 16
 struct mount_descriptor {
-	struct node *mnt_point;
-	struct node *mnt_root;
+	struct inode *mnt_point; /* Node of the parent FS */
+	struct inode *mnt_root;  /* Root node of the mounted FS */
 	struct mount_descriptor *mnt_parent;
 	struct dlist_head mnt_mounts;
 	struct dlist_head mnt_child;
@@ -27,14 +28,16 @@ struct mount_descriptor {
 extern struct mount_descriptor *mount_table(void);
 
 extern struct mount_descriptor *mount_table_add(struct path *mnt_point_path,
-		struct node *root, const char *dev);
+		struct inode *root, const char *dev);
 
 extern int mount_table_del(struct mount_descriptor *mdesc);
 
-extern struct mount_descriptor *mount_table_get_child(struct mount_descriptor *parent, struct node *mnt_point);
+extern struct mount_descriptor *mount_table_get_child(
+		struct mount_descriptor *parent, struct inode *mnt_point);
 
-extern int mount(char *dev,  char *dir, char *fs_type);
+extern struct block_dev *bdev_by_path(const char *source);
 
+extern int mount(const char *source, const char *target, const char *fs_type);
 extern int umount(char *dir);
 
 #endif /* FS_MOUNT_H_ */

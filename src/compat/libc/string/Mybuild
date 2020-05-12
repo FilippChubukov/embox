@@ -5,12 +5,15 @@ static module str {
 	source "memrchr.c"
 	source "memcmp.c"
 	source "memcpy.c"
+	source "memccpy.c"
 	source "memmove.c"
 	source "memset.c"
 	source "strcat.c"
 	source "strchr.c"
 	source "strchrnul.c"
 	source "strcmp.c"
+	source "strcoll.c"
+	source "strxfrm.c"
 	source "stpcpy.c"
 	source "strcpy.c"
 	source "strcspn.c"
@@ -31,6 +34,7 @@ static module str {
 	source "strtok.c"
 	source "strlcpy.c"
 	source "strnlen.c"
+	source "ffs.c"
 }
 
 static module str_dup {

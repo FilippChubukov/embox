@@ -15,9 +15,10 @@
 #include <util/dlist.h>
 #include <sys/types.h>
 #include <signal.h>
+#include <framework/mod/options.h>
 
-#define SERVICE_NAME_LEN 32
-#define OBJECTS_QUANTITY 0x10
+#define SERVICE_NAME_LEN OPTION_GET(NUMBER,service_name_len)
+#define SERVICES_COUNT OPTION_GET(NUMBER,services_count)
 
 struct service_list {
 	struct dlist_head dlist_item;
@@ -25,7 +26,7 @@ struct service_list {
 	pid_t pid;
 };
 
-POOL_DEF(pool, struct service_list, OBJECTS_QUANTITY);
+POOL_DEF(pool, struct service_list, SERVICES_COUNT);
 
 static DLIST_DEFINE(head);
 
@@ -121,7 +122,7 @@ int main(int argc, char **argv) {
 
 	command = argv[1];
 
-	if (strcmp(argv[2], "stop") == 0) {
+	if (argc > 2 && strcmp(argv[2], "stop") == 0) {
 		service_delete(command);
 		return 0;
 	}

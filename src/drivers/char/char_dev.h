@@ -1,30 +1,52 @@
 /**
  * @file
- * @brief
- *
- * @date 03.11.10
- * @author Anton Bondarev
+ * @brief Declarations for char devices
+ * @author Denis Deryugin <deryugin.denis@gmail.com>
+ * @version 0.1
+ * @date 2015-10-05
  */
 
-#ifndef DEVICE_H_
-#define DEVICE_H_
+#ifndef CHAR_DEV_DVFS_H_
+#define CHAR_DEV_DVFS_H_
 
-struct kfile_operations;
+#include <drivers/device.h>
+#include <fs/idesc.h>
+#include <util/array.h>
 
-typedef int (* dev_module_init_ft)(void);
-struct dev_module {
-	const char * name;
-	const struct kfile_operations *fops;
-	const dev_module_init_ft init;
+#include <config/embox/driver/char_dev.h>
+#include <framework/mod/options.h>
+
+#define MAX_CDEV_QUANTITY OPTION_MODULE_GET(embox__driver__char_dev, NUMBER, dev_quantity)
+
+#define CHAR_DEV_DEF(chname, open_fn, close_fn, idesc_op, priv) \
+	ARRAY_SPREAD_DECLARE(const struct dev_module, __char_device_registry); \
+	ARRAY_SPREAD_ADD(__char_device_registry, { \
+			.name = chname, \
+			.dev_priv = priv, \
+			.dev_iops = idesc_op, \
+			.dev_open = open_fn, \
+			.dev_close = close_fn, \
+			 })
+
+struct dev_module;
+
+struct idesc_dev {
+	struct idesc idesc;
+	struct dev_module *dev;
 };
 
-#include <util/array.h>
-#define CHAR_DEV_DEF(name, file_op, idesc_op, init_func) \
-	ARRAY_SPREAD_DECLARE(const struct dev_module, __device_registry); \
-	ARRAY_SPREAD_ADD(__device_registry, {name, file_op, init_func})
-
 extern int char_dev_init_all(void);
-extern int char_dev_register(const char *name,
-		const struct kfile_operations *ops);
+extern int char_dev_register(struct dev_module *cdev);
+extern int char_dev_idesc_fstat(struct idesc *idesc, void *buff);
+extern struct idesc *char_dev_idesc_create(struct dev_module *cdev);
 
-#endif /* DEVICE_H_ */
+static inline struct dev_module *idesc_to_dev_module(struct idesc *desc) {
+	struct idesc_dev *d = (struct idesc_dev *) desc;
+
+	return d->dev;
+}
+
+extern struct idesc *char_dev_default_open(struct dev_module *cdev, void *priv);
+extern void char_dev_default_close(struct idesc *idesc);
+
+#endif /* CHAR_DEV_DVFS_H_ */

@@ -94,7 +94,7 @@ static struct idesc *fuse_open(struct inode *node, struct idesc *desc) {
 	}
 	data = node->i_data;
 	/* FIXME check this */
-	data->fi.flags = node->flags;
+	data->fi.flags = node->i_mode;
 
 	task = fuse_in(sb_fuse_data);
 	sb_fuse_data->fuse_lowlevel_ops->open(NULL, node->i_no, &data->fi);
@@ -103,7 +103,7 @@ static struct idesc *fuse_open(struct inode *node, struct idesc *desc) {
 	return desc;
 }
 
-static int fuse_close(struct file *desc) {
+static int fuse_close(struct file_desc *desc) {
 	struct inode *inode;
 	struct fuse_req_embox *req;
 	struct task *task;
@@ -152,7 +152,7 @@ static int fuse_remove(struct inode *inode) {
 	return 0;
 }
 
-static size_t fuse_read(struct file *desc, void *buf, size_t size) {
+static size_t fuse_read(struct file_desc *desc, void *buf, size_t size) {
 	struct inode *inode;
 	struct fuse_req_embox *req;
 	size_t ret;
@@ -180,7 +180,7 @@ static size_t fuse_read(struct file *desc, void *buf, size_t size) {
 	return ret;
 }
 
-static size_t fuse_write(struct file *desc, void *buf, size_t size) {
+static size_t fuse_write(struct file_desc *desc, void *buf, size_t size) {
 	struct inode *inode;
 	struct fuse_req_embox *req;
 	size_t ret;
@@ -204,15 +204,15 @@ static size_t fuse_write(struct file *desc, void *buf, size_t size) {
 	return ret;
 }
 
-static struct inode *fuse_lookup(char const *name, struct dentry const *dir) {
+static struct inode *fuse_lookup(char const *name, struct inode const *dir) {
 	struct inode *node;
 	struct fuse_req_embox *req;
 	struct task *task;
 	struct fuse_sb_priv_data *sb_fuse_data;
 
-	sb_fuse_data = dir->d_sb->sb_data;
+	sb_fuse_data = dir->i_sb->sb_data;
 
-	if (NULL == (node = dvfs_alloc_inode(dir->d_sb))) {
+	if (NULL == (node = dvfs_alloc_inode(dir->i_sb))) {
 		return NULL;
 	}
 	if (NULL == (req = fuse_req_alloc())) {
@@ -221,7 +221,7 @@ static struct inode *fuse_lookup(char const *name, struct dentry const *dir) {
 
 	fuse_fill_req(req, node, NULL);
 	task = fuse_in(sb_fuse_data);
-	sb_fuse_data->fuse_lowlevel_ops->lookup((fuse_req_t) req, dir->d_inode->i_no, name);
+	sb_fuse_data->fuse_lowlevel_ops->lookup((fuse_req_t) req, dir->i_no, name);
 	fuse_out(sb_fuse_data, task);
 	fuse_req_free(req);
 
@@ -233,7 +233,7 @@ static struct inode *fuse_lookup(char const *name, struct dentry const *dir) {
 	return node;
 }
 
-static int fuse_iterate(struct inode *next, struct inode *parent, struct dir_ctx *ctx) {
+static int fuse_iterate(struct inode *next, char *name, struct inode *parent, struct dir_ctx *ctx) {
 	char buf[512];
 	int res = 0;
 	struct fuse_req_embox *req;
@@ -269,6 +269,7 @@ static int fuse_iterate(struct inode *next, struct inode *parent, struct dir_ctx
 	next->i_no = -1;
 	next->i_data = data;
 	strcpy(data->name, dirent->name);
+	strcpy(name, data->name);
 
 	fuse_fill_req(req, next, NULL);
 	task = fuse_in(sb_fuse_data);
@@ -304,14 +305,6 @@ static int fuse_create(struct inode *i_new, struct inode *i_dir, int mode) {
 	}
 	fuse_out(sb_fuse_data, task);
 	fuse_req_free(req);
-
-	return 0;
-}
-
-static int fuse_pathname(struct inode *inode, char *buf, int flags) {
-	struct fuse_data *data = inode->i_data;
-
-	strcpy(buf, data->name);
 
 	return 0;
 }
@@ -395,7 +388,6 @@ const struct super_block_operations fuse_sbops = {
 const struct inode_operations fuse_iops = {
 	.lookup   = fuse_lookup,
 	.iterate  = fuse_iterate,
-	.pathname = fuse_pathname,
 	.create = fuse_create,
 	.remove = fuse_remove,
 	.getxattr = ext2fuse_getxattr,

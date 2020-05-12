@@ -26,7 +26,9 @@
 #include <fcntl.h>
 
 #include <fs/fs_driver.h>
+#include <fs/super_block.h>
 #include <fs/vfs.h>
+#include <fs/inode.h>
 #include <fs/hlpr_path.h>
 #include <util/array.h>
 #include <util/err.h>
@@ -36,9 +38,10 @@
 #include <mem/phymem.h>
 #include <mem/sysmalloc.h>
 #include <fs/file_operation.h>
-#include <fs/file_system.h>
+#include <fs/super_block.h>
 #include <fs/file_desc.h>
-#include <drivers/block_dev/flash/flash.h>
+#include <drivers/flash/flash.h>
+#include <drivers/flash/emulator.h>
 
 #define FS_NAME "jffs2"
 
@@ -50,12 +53,12 @@ POOL_DEF(jffs2_fs_pool, struct jffs2_fs_info,
 POOL_DEF(jffs2_file_pool, struct jffs2_file_info,
 		OPTION_GET(NUMBER,inode_quantity));
 
+static int jffs2_free_fs(struct super_block *sb);
 static int jffs2_read_inode (struct _inode *inode);
 static void jffs2_clear_inode (struct _inode *inode);
 
 static int jffs2_truncate_file (struct _inode *inode);
 static unsigned char gc_buffer[PAGE_CACHE_SIZE];	/*avoids kmalloc when user may be under memory pressure */
-static unsigned char n_fs_mounted = 0;  /* a counter to track the number of jffs2 instances mounted */
 
 /***********************
  * Directory operations
@@ -266,7 +269,7 @@ static int jffs2_find(jffs2_dirsearch_t * d) {
  * Process a mount request. This mainly creates a root for the
  * filesystem.
  */
-static int jffs2_read_super(struct super_block *sb) {
+static int jffs2_read_super(struct jffs2_super_block *sb) {
 	struct jffs2_sb_info *c;
 	int err;
 
@@ -310,13 +313,13 @@ static int jffs2_read_super(struct super_block *sb) {
 }
 
 static int jffs2_mount(struct nas *dir_nas) {
-	struct super_block *jffs2_sb;
+	struct jffs2_super_block *jffs2_sb;
 	struct jffs2_sb_info *c;
 	int err;
 
 	struct jffs2_fs_info *fsi;
 
-	fsi = dir_nas->fs->fsi;
+	fsi = dir_nas->fs->sb_data;
 
 	jffs2_sb = &fsi->jffs2_sb;
 
@@ -325,7 +328,7 @@ static int jffs2_mount(struct nas *dir_nas) {
 	}
 
 	c = &jffs2_sb->jffs2_sb;
-	memset(jffs2_sb, 0, sizeof (struct super_block));
+	memset(jffs2_sb, 0, sizeof (struct jffs2_super_block));
 
 	jffs2_sb->bdev = dir_nas->fs->bdev;
 
@@ -338,18 +341,12 @@ static int jffs2_mount(struct nas *dir_nas) {
 	spin_init(&c->inocache_lock, __SPIN_UNLOCKED);
 	spin_init(&c->erase_completion_lock, __SPIN_UNLOCKED);
 
-	if (n_fs_mounted++ == 0) {
-		jffs2_create_slab_caches(); /* No error check, cannot fail */
-		jffs2_compressors_init();
-	}
+	jffs2_compressors_init();
 
 	err = jffs2_read_super(jffs2_sb);
 
 	if (err) {
-		if (--n_fs_mounted == 0) {
-			jffs2_destroy_slab_caches();
-			jffs2_compressors_exit();
-		}
+		jffs2_compressors_exit();
 
 		sysfree(c->inocache_list);
 		return err;
@@ -364,89 +361,68 @@ static int jffs2_mount(struct nas *dir_nas) {
 	jffs2_erase_pending_blocks(c, 0);
 
 #ifdef CYGOPT_FS_JFFS2_GCTHREAD
-		jffs2_start_garbage_collect_thread(c);
+	jffs2_start_garbage_collect_thread(c);
 #endif
 
-	jffs2_sb->s_mount_count++;
 	D2(printf("jffs2_mounted superblock"));
 
 	return ENOERR;
 }
 
-
-
-static int umount_vfs_dir_entry(struct nas *nas) {
-	struct node *child;
-
-	if (node_is_directory(nas->node)) {
-		while (NULL != (child =	vfs_subtree_get_child_next(nas->node, NULL))) {
-			if(node_is_directory(child)) {
-				umount_vfs_dir_entry(child->nas);
-			}
-
-			pool_free(&jffs2_file_pool, child->nas->fi->privdata);
-			vfs_del_leaf(child);
-		}
-	}
+static int jffs2fs_umount_entry(struct inode *node) {
+	pool_free(&jffs2_file_pool, inode_priv(node));
 
 	return 0;
 }
 
-
 /**
  * Unmount the filesystem.
  */
-static int jffs2_umount(struct nas *dir_nas) {
+static int jffs2_clean_sb(struct super_block *sb) {
 	struct _inode *root;
-	struct super_block *jffs2_sb;
+	struct jffs2_super_block *jffs2_sb;
+	struct jffs2_fs_info *fsi;
 	struct jffs2_sb_info *c;
-    struct jffs2_full_dirent *fd, *next;
-    struct jffs2_file_info *dir_fi;
+	struct jffs2_full_dirent *fd, *next;
 
-    dir_fi = dir_nas->fi->privdata;
-    root = (struct _inode *) dir_fi->_inode;
-    jffs2_sb = root->i_sb;
-    c = &jffs2_sb->jffs2_sb;
+	fsi = sb->sb_data;
+	jffs2_sb = &fsi->jffs2_sb;
+	root = jffs2_sb->s_root;
+	c = &jffs2_sb->jffs2_sb;
 
 	D2(printf("jffs2_umount\n"));
 
 	/* Only really umount if this is the only mount */
-	if (jffs2_sb->s_mount_count == 1) {
-		icache_evict(root, NULL);
+	icache_evict(root, NULL);
 
-		if (root->i_count != 1) {
-			printf("Ino #1 has use count %d\n", root->i_count);
-			return EBUSY;
-		}
+	if (root->i_count != 1) {
+		printf("Ino #1 has use count %d\n", root->i_count);
+		return EBUSY;
+	}
 #ifdef CYGOPT_FS_JFFS2_GCTHREAD
-		jffs2_stop_garbage_collect_thread(c);
+	jffs2_stop_garbage_collect_thread(c);
 #endif
-		jffs2_iput(root);	/* Time to free the root inode */
+	jffs2_iput(root);	/* Time to free the root inode */
 
-		/* free directory entries */
-		for (fd = root->jffs2_i.dents; fd; fd = next) {
-			next=fd->next;
-			jffs2_free_full_dirent(fd);
-		}
-
-		sysfree(root);
-
-		/* Clean up the super block and root inode */
-		jffs2_free_ino_caches(c);
-		jffs2_free_raw_node_refs(c);
-		sysfree(c->blocks);
-		sysfree(c->inocache_list);
-
-		D2(printf("jffs2_umount No current mounts\n"));
-	} else {
-		jffs2_sb->s_mount_count--;
-    }
-	if (--n_fs_mounted == 0) {
-		jffs2_destroy_slab_caches();
-		jffs2_compressors_exit();
+	/* free directory entries */
+	for (fd = root->jffs2_i.dents; fd; fd = next) {
+		next=fd->next;
+		jffs2_free_full_dirent(fd);
 	}
 
-	return umount_vfs_dir_entry(dir_nas);
+	sysfree(root);
+
+	/* Clean up the super block and root inode */
+	jffs2_free_ino_caches(c);
+	jffs2_free_raw_node_refs(c);
+	sysfree(c->blocks);
+	sysfree(c->inocache_list);
+
+	D2(printf("jffs2_umount No current mounts\n"));
+
+	jffs2_compressors_exit();
+
+	return jffs2_free_fs(sb);
 }
 
 /**
@@ -857,20 +833,18 @@ static int jffs2_truncate_file (struct _inode *inode) {
 
 static int jffs2_fo_write(struct file_desc *desc, char *buf, ssize_t size) {
 	struct _inode *inode;
-	off_t pos = desc->cursor;
+	off_t pos = file_get_pos(desc);
 	ssize_t resid = size;
 	struct jffs2_raw_inode ri;
 	struct jffs2_inode_info *f;
 	struct jffs2_sb_info *c;
-	struct nas *nas;
 	struct jffs2_file_info *fi;
 
 	uint32_t writtenlen;
 	int err;
 	off_t len;
 
-	nas = desc->node->nas;
-	fi = nas->fi->privdata;
+	fi = inode_priv(desc->f_inode);
 
 	inode = fi->_inode;
 	f = JFFS2_INODE_INFO(inode);
@@ -930,8 +904,6 @@ static int jffs2_fo_write(struct file_desc *desc, char *buf, ssize_t size) {
 		inode->i_size = pos;
 	}
 
-	desc->cursor = pos;
-
 	return writtenlen;
 }
 
@@ -966,7 +938,7 @@ void jffs2_gc_release_page(struct jffs2_sb_info *c,
 	/* Do nothing */
 }
 
-static struct _inode *new_inode(struct super_block *sb) {
+static struct _inode *new_inode(struct jffs2_super_block *sb) {
 	/* Only called in write.c jffs2_new_inode
 	 * Always adds itself to inode cache	 */
 
@@ -1003,7 +975,7 @@ static struct _inode *new_inode(struct super_block *sb) {
 	return inode;
 }
 
-static struct _inode *ilookup(struct super_block *sb, uint32_t ino)
+static struct _inode *ilookup(struct jffs2_super_block *sb, uint32_t ino)
 {
 	struct _inode *inode = NULL;
 
@@ -1018,7 +990,7 @@ static struct _inode *ilookup(struct super_block *sb, uint32_t ino)
 	return inode;
 }
 
-struct _inode *jffs2_iget(struct super_block *sb, uint32_t ino) {
+struct _inode *jffs2_iget(struct jffs2_super_block *sb, uint32_t ino) {
 	/* Must first check for cached inode
 	 * If this fails let new_inode create one
 	 */
@@ -1128,12 +1100,12 @@ static void jffs2_clear_inode (struct _inode *inode) {
 struct _inode *jffs2_new_inode (struct _inode *dir_i,
 					int mode, struct jffs2_raw_inode *ri) {
 	struct _inode *inode;
-	struct super_block *sb = dir_i->i_sb;
+	struct jffs2_super_block *sb = dir_i->i_sb;
 	struct jffs2_sb_info *c;
 	struct jffs2_inode_info *f;
 	int ret;
 
-	D1(printk( "jffs2_new_inode(): dir_i %d, mode 0x%x\n", dir_i->i_ino, mode));
+	D1(printk( "jffs2_new_inode(): dir_i %d, mode 0x%x\n", dir_i->i_ino, i_mode));
 
 	c = &sb->jffs2_sb;
 
@@ -1225,9 +1197,9 @@ struct jffs2_inode_info *jffs2_gc_fetch_inode(struct jffs2_sb_info *c,
 						     int inum, int nlink) {
 	struct _inode *inode;
 	struct jffs2_inode_cache *ic;
-	struct super_block *sb;
+	struct jffs2_super_block *sb;
 
-	sb = member_cast_out(c, struct super_block, jffs2_sb);
+	sb = member_cast_out(c, struct jffs2_super_block, jffs2_sb);
 
 	if (!nlink) {
 	/* The inode has zero nlink but its nodes weren't yet marked
@@ -1361,13 +1333,12 @@ uint32_t jffs2_to_os_mode (uint32_t jmode) {
 	return 0;
 }
 
-static struct idesc *jffs2fs_open(struct node *node, struct file_desc *file_desc,
-		int flags);
+static struct idesc *jffs2fs_open(struct inode *node, struct idesc *idesc);
 static int jffs2fs_close(struct file_desc *desc);
 static size_t jffs2fs_read(struct file_desc *desc, void *buf, size_t size);
 static size_t jffs2fs_write(struct file_desc *desc, void *buf, size_t size);
 
-static struct kfile_operations jffs2_fop = {
+static struct file_operations jffs2_fop = {
 	.open = jffs2fs_open,
 	.close = jffs2fs_close,
 	.read = jffs2fs_read,
@@ -1377,134 +1348,112 @@ static struct kfile_operations jffs2_fop = {
 /*
  * file_operation
  */
-static struct idesc *jffs2fs_open(struct node *node, struct file_desc *desc, int flags) {
-	struct nas *nas;
+static struct idesc *jffs2fs_open(struct inode *node, struct idesc *idesc) {
 	struct jffs2_file_info *fi;
 	struct jffs2_fs_info *fsi;
 	char path[PATH_MAX];
 	int res;
 
-	nas = node->nas;
-	fi = nas->fi->privdata;
-	fsi = nas->fs->fsi;
+	fi = inode_priv(node);
+	fsi = node->i_sb->sb_data;
 
-	nas->fi->ni.size = fi->_inode->i_size;
+	file_set_size(file_desc_from_idesc(idesc), fi->_inode->i_size);
 
-	vfs_get_relative_path(nas->node, path, PATH_MAX);
+	vfs_get_relative_path(node, path, PATH_MAX);
 
-	res = jffs2_open(fsi->jffs2_sb.s_root, path, flags);
+	res = jffs2_open(fsi->jffs2_sb.s_root, path, idesc->idesc_flags);
 	if (res) {
 		return err_ptr(-res);
 	}
-	return &desc->idesc;
+	return idesc;
 }
 
 static int jffs2fs_close(struct file_desc *desc) {
-	struct nas *nas;
 	struct jffs2_file_info *fi;
 
 	if (NULL == desc) {
 		return 0;
 	}
-	nas = desc->node->nas;
-	fi = nas->fi->privdata;
-	nas->fi->ni.size = fi->_inode->i_size;
+	fi = inode_priv(desc->f_inode);
+	file_set_size(desc, fi->_inode->i_size);
 
 	return jffs2_fo_close(fi->_inode);
 }
 
 static size_t jffs2fs_read(struct file_desc *desc, void *buff, size_t size) {
 	int rc;
-	struct nas *nas;
 	struct jffs2_file_info *fi;
 	struct jffs2_inode_info *f;
 	struct jffs2_sb_info *c;
 	size_t len;
+	off_t pos;
 
-	nas = desc->node->nas;
-	fi = nas->fi->privdata;
+	pos = file_get_pos(desc);
+
+	fi = inode_priv(desc->f_inode);
 
 	f = JFFS2_INODE_INFO(fi->_inode);
 	c = &fi->_inode->i_sb->jffs2_sb;
 
-	len = min(size, fi->_inode->i_size - desc->cursor);
+	len = min(size, fi->_inode->i_size - pos);
 
 	if (0 != (rc = jffs2_read_inode_range(c, f,
-			(unsigned char *) buff, desc->cursor, len))) {
+			(unsigned char *) buff, pos, len))) {
 		SET_ERRNO(rc);
 		return 0;
 	}
-
-	desc->cursor += len;
 
 	return len;
 }
 
 static size_t jffs2fs_write(struct file_desc *desc, void *buff, size_t size) {
 	uint32_t bytecount;
-	struct nas *nas;
 	struct jffs2_file_info *fi;
 
-	nas = desc->node->nas;
-	fi = nas->fi->privdata;
+	fi = inode_priv(desc->f_inode);
 
 	bytecount = jffs2_fo_write(desc, buff, size);
 
-	nas->fi->ni.size = fi->_inode->i_size;
+	file_set_size(desc, fi->_inode->i_size);
 
 	return bytecount;
 }
 
-static int jffs2_free_fs(struct nas *nas) {
-	struct jffs2_file_info *fi;
-	struct jffs2_fs_info *fsi;
+static int jffs2_free_fs(struct super_block *sb) {
+	struct jffs2_fs_info *fsi = sb->sb_data;
 
-	if(NULL != nas->fs) {
-		fsi = nas->fs->fsi;
-
-		if(NULL != fsi) {
-			pool_free(&jffs2_fs_pool, fsi);
-		}
-		filesystem_free(nas->fs);
-	}
-
-	if(NULL != (fi = nas->fi->privdata)) {
-		pool_free(&jffs2_file_pool, fi);
+	if (NULL != fsi) {
+		pool_free(&jffs2_fs_pool, fsi);
 	}
 
 	return 0;
 }
 
-static int jffs2fs_init(void * par);
-static int jffs2fs_format(void *path);
-static int jffs2fs_mount(void *dev, void *dir);
-static int jffs2fs_create(struct node *parent_node, struct node *node);
-static int jffs2fs_delete(struct node *node);
-static int jffs2fs_truncate(struct node *node, off_t length);
-static int jffs2fs_umount(void *dir);
-
+static int jffs2fs_format(struct block_dev *bdev, void *priv);
+static int jffs2fs_mount(struct super_block *sb, struct inode *dest);
+static int jffs2fs_create(struct inode *parent_node, struct inode *node);
+static int jffs2fs_delete(struct inode *node);
+static int jffs2fs_truncate(struct inode *node, off_t length);
 
 static struct fsop_desc jffs2_fsop = {
-	.init	     = jffs2fs_init,
-	.format	     = jffs2fs_format,
-	.mount	     = jffs2fs_mount,
-	.create_node = jffs2fs_create,
-	.delete_node = jffs2fs_delete,
+	.format	      = jffs2fs_format,
+	.mount	      = jffs2fs_mount,
+	.create_node  = jffs2fs_create,
+	.delete_node  = jffs2fs_delete,
 
-	.getxattr    = NULL,
-	.setxattr    = NULL,
-	.listxattr   = NULL,
+	.getxattr     = NULL,
+	.setxattr     = NULL,
+	.listxattr    = NULL,
 
-	.truncate    = jffs2fs_truncate,
-	.umount      = jffs2fs_umount,
+	.truncate     = jffs2fs_truncate,
+	.umount_entry = jffs2fs_umount_entry,
 };
 
-static int jffs2fs_init(void * par) {
-	return 0;
-};
-
+static int jffs2_fill_sb(struct super_block *sb, const char *source);
 static struct fs_driver jffs2fs_driver = {
 	.name = FS_NAME,
+	.fill_sb = jffs2_fill_sb,
+	.clean_sb = jffs2_clean_sb,
 	.file_op = &jffs2_fop,
 	.fsop = &jffs2_fsop,
 };
@@ -1515,9 +1464,8 @@ static jffs2_file_info_t *jffs2_fi_alloc(struct nas *nas, void *fs) {
 	fi = pool_alloc(&jffs2_file_pool);
 	if (fi) {
 		memset(fi, 0, sizeof(struct jffs2_file_info));
+		inode_priv_set(nas->node, fi);
 		nas->fi->ni.size = 0;
-		nas->fi->privdata = fi;
-		nas->fs = fs;
 	}
 
 	return fi;
@@ -1528,12 +1476,12 @@ static int mount_vfs_dir_enty(struct nas *dir_nas) {
 	struct jffs2_full_dirent *fd_list;
 	struct _inode *inode = NULL;
 	uint32_t ino = 0;
-	struct node *vfs_node;
+	struct inode *vfs_node;
 	struct nas *nas;
 	struct _inode *dir_i;
 	struct jffs2_file_info *fi;
 
-	fi = dir_nas->fi->privdata;
+	fi = inode_priv(dir_nas->node);
 	dir_i = fi->_inode;
 
 	dir_f = JFFS2_INODE_INFO(dir_i);
@@ -1552,9 +1500,9 @@ static int mount_vfs_dir_enty(struct nas *dir_nas) {
 					}
 				}
 				nas = vfs_node->nas;
-				if(NULL == nas->fi->privdata) {
+				if (NULL == inode_priv(nas->node)) {
 					if (NULL == (fi = jffs2_fi_alloc(nas, dir_nas->fs))) {
-						nas->fi->privdata = (void *) fi;
+						inode_priv_set(nas->node, fi);
 						return ENOMEM;
 					}
 					fi->_inode = inode;
@@ -1570,18 +1518,18 @@ static int mount_vfs_dir_enty(struct nas *dir_nas) {
 	return 0;
 }
 
-static int jffs2fs_create(struct node *parent_node, struct node *node) {
+static int jffs2fs_create(struct inode *parent_node, struct inode *node) {
 	int rc;
 	struct nas *nas;
 	struct jffs2_file_info *fi, *parents_fi;
 
 	nas = node->nas;
-	parents_fi = parent_node->nas->fi->privdata;
+	parents_fi = inode_priv(parent_node);
 
 	if (node_is_directory(node)) {
-		node->mode |= S_IRUGO|S_IXUGO|S_IWUSR;
+		node->i_mode |= S_IRUGO|S_IXUGO|S_IWUSR;
 		if (0 != (rc = jffs2_ops_mkdir(parents_fi->_inode,
-				(const char *) &node->name, node->mode))) {
+				(const char *) &node->name, node->i_mode))) {
 			return -rc;
 		}
 		/* file info for new dir will be allocate into */
@@ -1590,30 +1538,30 @@ static int jffs2fs_create(struct node *parent_node, struct node *node) {
 		}
 	} else {
 		if (NULL == (fi = jffs2_fi_alloc(nas, parent_node->nas->fs))) {
-				nas->fi->privdata = (void *) fi;
+				inode_priv_set(node, fi);
 				return ENOMEM;
 			}
 		if (0 != (rc = jffs2_create(parents_fi->_inode,
 				(const unsigned char *) &node->name,
-								node->mode, &fi->_inode))) {
+								node->i_mode, &fi->_inode))) {
 			return -rc;
 		}
 	}
 	return 0;
 }
 
-static int jffs2fs_delete(struct node *node) {
+static int jffs2fs_delete(struct inode *node) {
 	int rc;
-	struct node *parents;
+	struct inode *parent;
 	struct jffs2_file_info *par_fi, *fi;
 
-	if (NULL == (parents = vfs_subtree_get_parent(node))) {
+	if (NULL == (parent = vfs_subtree_get_parent(node))) {
 		rc = ENOENT;
 		return -rc;
 	}
 
-	par_fi = parents->nas->fi->privdata;
-	fi = node->nas->fi->privdata;
+	par_fi = inode_priv(parent);
+	fi = inode_priv(node);
 	if (node_is_directory(node)) {
 		if (0 != (rc = jffs2_ops_rmdir(par_fi->_inode,
 						(const char *) node->name))) {
@@ -1626,92 +1574,52 @@ static int jffs2fs_delete(struct node *node) {
 		}
 	}
 
-	if(NULL != (fi = node->nas->fi->privdata)) {
+	if(NULL != (fi = inode_priv(node))) {
 		pool_free(&jffs2_file_pool, fi);
 	}
-
-	vfs_del_leaf(node);
 
 	return 0;
 }
 
-static int jffs_flash_name(struct node *dev_node, char flash_name[PATH_MAX]) {
-	char dev_node_path[PATH_MAX];
-
-	vfs_get_relative_path(dev_node, dev_node_path, PATH_MAX);
-
-	return snprintf(flash_name, PATH_MAX, "%s_flash", dev_node_path);
-}
-
-static int jffs2fs_format(void *dev) {
-	struct node *dev_node = dev;
+static int jffs2fs_format(struct block_dev *bdev, void *priv) {
 	char flash_node_name[PATH_MAX];
 
-	if (0 > jffs_flash_name(dev_node, flash_node_name)) {
-		return -ERANGE;
-	}
+	snprintf(flash_node_name, PATH_MAX, "%s_flash", bdev->name);
 
-	return flash_emu_dev_create(dev_node, flash_node_name);
+	return flash_emu_dev_create(flash_node_name, 16 * 1024, 1024);
 }
 
-static struct block_dev *jffs_bdev_by_node(struct node *dev_node, int *err) {
-	struct node_fi *dev_fi;
-	struct nas *dev_nas;
+static int jffs2_fill_sb(struct super_block *sb, const char *source) {
+	struct block_dev *bdev;
+	struct jffs2_fs_info *fsi;
 
-	*err = 0;
-	dev_nas = dev_node->nas;
-
-	if (NULL == (dev_fi = dev_nas->fi)) {
-		*err = ENODEV;
-		return NULL;
+	bdev = bdev_by_path(source);
+	if (bdev == NULL) {
+		return -ENODEV;
 	}
 
-	return dev_fi->privdata;
-}
+	sb->bdev = bdev;
 
-static struct block_dev *jffs_get_flashdev(struct node *dev_node, int *err) {
-	char flash_node_name[PATH_MAX];
-	struct node *flash_node;
-
-	jffs_flash_name(dev_node, flash_node_name);
-
-	if (NULL == (flash_node = vfs_subtree_lookup(vfs_get_root(), flash_node_name))) {
-		return jffs_bdev_by_node(dev_node, err);
+	/* allocate this fs info */
+	if (NULL == (fsi = pool_alloc(&jffs2_fs_pool))) {
+		return -ENOMEM;
 	}
+	memset(fsi, 0, sizeof(struct jffs2_fs_info));
+	sb->sb_data = fsi;
 
-	return jffs_bdev_by_node(flash_node, err);
+	return 0;
 }
 
-static int jffs2fs_mount(void *dev, void *dir) {
+static int jffs2fs_mount(struct super_block *sb, struct inode *dest) {
 	int rc;
-	struct node *dir_node;
 	struct nas *dir_nas;
 	struct jffs2_file_info *fi;
 	struct jffs2_fs_info *fsi;
 
-	dir_node = dir;
-	dir_nas = dir_node->nas;
-
-	if (NULL == (dir_nas->fs = filesystem_create(FS_NAME))) {
-		rc = ENOMEM;
-		goto error;
-	}
-
-	if (NULL == (dir_nas->fs->bdev = jffs_get_flashdev(dev, &rc))) {
-		goto error;
-	}
-
-	/* allocate this fs info */
-	if (NULL == (fsi = pool_alloc(&jffs2_fs_pool))) {
-		dir_nas->fs->fsi = fsi;
-		rc = ENOMEM;
-		goto error;
-	}
-	memset(fsi, 0, sizeof(struct jffs2_fs_info));
-	dir_nas->fs->fsi = fsi;
+	dir_nas = dest->nas;
 
 	if (NULL == (fi = pool_alloc(&jffs2_file_pool))) {
-		dir_nas->fi->privdata = (void *) fi;
+		inode_priv_set(dest, fi);
 		rc = ENOMEM;
 		goto error;
 	}
@@ -1721,7 +1629,8 @@ static int jffs2fs_mount(void *dev, void *dir) {
 		goto error;
 	}
 
-	dir_nas->fi->privdata = fi;
+	inode_priv_set(dest, fi);
+	fsi = sb->sb_data;
 	fi->_inode = fsi->jffs2_sb.s_root;
 
 	if(0 != (rc = mount_vfs_dir_enty(dir_nas))) {
@@ -1730,40 +1639,22 @@ static int jffs2fs_mount(void *dev, void *dir) {
 
 	return 0;
 
-	error:
-	jffs2_free_fs(dir_nas);
+error:
+	jffs2_free_fs(sb);
 
 	return -rc;
 }
 
-static int jffs2fs_truncate (struct node *node, off_t length) {
+static int jffs2fs_truncate (struct inode *node, off_t length) {
 	struct nas *nas = node->nas;
 	struct jffs2_file_info *fi;
 
 	nas->fi->ni.size = length;
 
-	fi = nas->fi->privdata;
+	fi = inode_priv(node);
 	jffs2_truncate_file(fi->_inode);
 
 	return 0;
 }
-
-static int jffs2fs_umount(void *dir) {
-	struct node *dir_node;
-	struct nas *dir_nas;
-	int rc;
-
-	dir_node = dir;
-	dir_nas = dir_node->nas;
-
-	/* delete all entry node */
-	if(0 != (rc = jffs2_umount(dir_nas))) {
-		return rc;
-	}
-
-	/* free jffs2 file system pools and buffers*/
-	return jffs2_free_fs(dir_nas);
-}
-
 
 DECLARE_FILE_SYSTEM_DRIVER(jffs2fs_driver);

@@ -20,17 +20,9 @@ module gptimer extends embox.arch.clock {
 	option number irq_num=8               /* if amba pnp disable */
 }
 
-module mb_timer extends embox.arch.clock {
-	source "mb_timer.c"
-
-	option number mbtimer_base
-	option number irq_num
-
-	depends embox.kernel.irq
-	@NoRuntime depends embox.kernel.time.timer_handler
-}
-
 module cortexm_systick extends embox.arch.clock {
+	option number systick_hz = 1000
+
 	source "cortexm_systick.c"
 
 	//depends embox.kernel.irq
@@ -44,6 +36,7 @@ module raspi_systick extends embox.arch.clock {
 	//depends embox.kernel.irq
 	depends embox.kernel.time.clock_source
 	@NoRuntime depends embox.kernel.time.timer_handler
+	depends embox.driver.periph_memory
 }
 
 @BuildDepends(embox.arch.arm.cmsis)
@@ -78,6 +71,19 @@ module mips_clk extends embox.arch.clock {
 	@NoRuntime depends embox.kernel.time.timer_handler
 }
 
+module riscv_clk extends embox.arch.clock {
+	source "riscv_clk.c"
+
+	depends embox.kernel.irq
+	depends embox.kernel.time.clock_source
+	depends embox.arch.interrupt
+	@NoRuntime depends embox.kernel.time.timer_handler
+
+	option number base_mtime=0x200bff8
+	option number base_mtimecmp=0x2004000
+	option number rtc_freq=1000000
+}
+
 module lapic_timer extends embox.arch.clock {
 	source "lapic_timer.c"
 
@@ -102,4 +108,11 @@ module hpet {
 
 	depends embox.kernel.time.clock_source
 	depends third_party.lib.acpica
+}
+
+module xen extends embox.arch.clock {
+	source "xen.c"
+
+	depends embox.kernel.time.clock_source
+	depends embox.kernel.irq
 }

@@ -13,10 +13,10 @@
 #include <kernel/critical.h>
 #include <hal/reg.h>
 #include <hal/ipl.h>
-#include <hal/context.h>
 #include <drivers/irqctrl.h>
 
 #include <kernel/irq.h>
+#include <util/log.h>
 #include <embox/unit.h>
 
 #define NVIC_BASE 0xe000e100
@@ -47,6 +47,14 @@
 #define interrupted_from_fpu_mode(lr) ((lr & 0xF0) == 0xE0)
 
 #define FPU_CTX_SIZE   18
+
+/* Context saved by CPU on exception entering */
+struct exc_saved_base_ctx {
+	uint32_t r[5];
+	uint32_t lr;
+	uint32_t pc;
+	uint32_t psr;
+};
 
 /**
  * ENABLE, CLEAR, SET_PEND, CLR_PEND, ACTIVE is a base of bit arrays
@@ -90,7 +98,10 @@ static int nvic_init(void) {
 	int i;
 	void *ptr;
 
+	ipl = ipl_save();
+
 	for (i = 0; i < EXCEPTION_TABLE_SZ; i++) {
+		irqctrl_disable(i);
 		exception_table[i] = ((int) interrupt_handle_enter) | 1;
 	}
 
@@ -101,8 +112,6 @@ static int nvic_init(void) {
 
 	assert(EXCEPTION_TABLE_SZ >= 14);
 	exception_table[14] = ((int) __pendsv_handle) | 1;
-
-	ipl = ipl_save();
 
 	REG_STORE(SCB_VTOR, 1 << 29 /* indicate, table in SRAM */ |
 			(int) exception_table);
@@ -275,4 +284,29 @@ void irqctrl_force(unsigned int interrupt_nr) {
 	if (nr >= 0) {
 		REG_STORE(NVIC_SET_PEND_BASE + 4 * (nr / 32), 1 << (nr % 32));
 	}
+}
+
+void irqctrl_set_prio(unsigned int interrupt_nr, unsigned int prio) {
+	int nr = (int) interrupt_nr - 16;
+
+	if (prio > 15) {
+		log_error("irq prio > 15\n");
+		return;
+	}
+	/* In NVIC the lower priopity means higher IRQ prioriry. */
+	prio = 15 - prio;
+
+	if (nr >= 0) {
+		REG8_STORE(NVIC_PRIORITY_BASE + nr,
+			((prio << NVIC_PRIO_SHIFT) & 0xff));
+	}
+}
+
+unsigned int irqctrl_get_prio(unsigned int interrupt_nr) {
+	int nr = (int) interrupt_nr - 16;
+	if (nr >= 0) {
+		/* In NVIC the lower priopity means higher IRQ prioriry. */
+		return 15 - REG8_LOAD(NVIC_PRIORITY_BASE + nr);
+	}
+	return 0;
 }

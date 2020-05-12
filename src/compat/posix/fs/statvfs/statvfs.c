@@ -82,7 +82,7 @@ char *fsid2fsname(unsigned long f_sid) {
 	return "unknown";
 }
 
-static void statvfs_fill_from_file(struct file *file, struct statvfs *buf) {
+static void statvfs_fill_from_file(struct file_desc *file, struct statvfs *buf) {
 	struct super_block *sb;
 
 	assert(file);
@@ -97,7 +97,28 @@ static void statvfs_fill_from_file(struct file *file, struct statvfs *buf) {
 	}
 }
 
-static void statvfs_fill_from_bdev(struct file *bdev, struct statvfs *buf) {
+static struct super_block *dumb_fs_fill_sb(struct super_block *sb, struct file_desc *bdev) {
+	const struct fs_driver *fs_drv;
+	int res;
+
+	assert(sb);
+	assert(bdev);
+
+	array_spread_foreach(fs_drv, fs_drivers_registry) {
+		if (!fs_drv->fill_sb) {
+			continue;
+		}
+		res = fs_drv->fill_sb(sb, bdev);
+		if (!res) {
+			sb->fs_drv = fs_drv;
+			return sb;
+		}
+	}
+
+	return NULL;
+}
+
+static void statvfs_fill_from_bdev(struct file_desc *bdev, struct statvfs *buf) {
 	struct super_block sb_buf;
 	struct super_block *sb;
 	struct block_dev *dev;
@@ -134,11 +155,11 @@ int fstatvfs(int fd, struct statvfs *buf) {
 
 	switch(st_buf.st_mode & S_IFMT) {
 	case S_IFBLK:
-		statvfs_fill_from_bdev((struct file *)idesc, buf);
+		statvfs_fill_from_bdev((struct file_desc *)idesc, buf);
 		break;
 	case S_IFDIR:
 	case S_IFREG:
-		statvfs_fill_from_file((struct file *)idesc, buf);
+		statvfs_fill_from_file((struct file_desc *)idesc, buf);
 		break;
 	default:
 		return SET_ERRNO(EBADF);

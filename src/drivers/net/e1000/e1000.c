@@ -5,6 +5,7 @@
  * @date 01.10.2012
  * @author Anton Kozlov
  */
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -13,8 +14,6 @@
 
 #include <arpa/inet.h>
 #include <sys/mman.h>
-
-#include <asm/io.h>
 
 #include <drivers/pci/pci.h>
 #include <drivers/pci/pci_driver.h>
@@ -29,14 +28,12 @@
 
 #include <hal/reg.h>
 
-#include <drivers/net/e1000.h>
-
 #include <mem/misc/pool.h>
 
+#include <util/log.h>
 #include <util/binalign.h>
-#include <kernel/printk.h>
 
-#include <embox/unit.h>
+#include "e1000.h"
 
 static const struct pci_id e1000_id_table[] = {
 	{ PCI_VENDOR_ID_INTEL, PCI_DEV_ID_INTEL_82540EM },
@@ -95,7 +92,7 @@ struct e1000_priv {
 };
 
 static inline struct e1000_priv *e1000_get_priv(struct net_device *dev) {
-	return (struct e1000_priv *) binalign_bound((uintptr_t) netdev_priv(dev, struct e1000_priv), 16);
+	return (struct e1000_priv *) binalign_bound((uintptr_t) netdev_priv(dev), 16);
 }
 
 static void mdelay(int value) {
@@ -118,8 +115,8 @@ static int e1000_xmit(struct net_device *dev) {
 	/* Called from kernel space and IRQ. Don't want tail to be handled twice */
 	irq_lock();
 	{
-		head = REG_LOAD(e1000_reg(dev, E1000_REG_TDH));
-		tail = REG_LOAD(e1000_reg(dev, E1000_REG_TDT));
+		head = REG32_LOAD(e1000_reg(dev, E1000_REG_TDH));
+		tail = REG32_LOAD(e1000_reg(dev, E1000_REG_TDT));
 
 		if ((tail + 1 % E1000_TXDESC_NR) == head) {
 			goto out_unlock;
@@ -131,7 +128,7 @@ static int e1000_xmit(struct net_device *dev) {
 			goto out_unlock;
 		}
 
-		nic_priv->tx_descs[tail].buffer_address = (uint32_t) skb->mac.raw;
+		nic_priv->tx_descs[tail].buffer_address = (uint32_t) (uintptr_t) skb->mac.raw;
 		nic_priv->tx_descs[tail].status = 0;
 		nic_priv->tx_descs[tail].cmd = E1000_TX_CMD_EOP |
 					E1000_TX_CMD_FCS |
@@ -141,7 +138,7 @@ static int e1000_xmit(struct net_device *dev) {
 		++tail;
 		tail %= E1000_TXDESC_NR;
 
-		REG_STORE(e1000_reg(dev, E1000_REG_TDT), tail);
+		REG32_STORE(e1000_reg(dev, E1000_REG_TDT), tail);
 
 		skb_queue_push(&nic_priv->txing_queue, skb);
 	}
@@ -190,8 +187,8 @@ static void e1000_rx(struct net_device *dev) {
 	 */
 	irq_lock();
 	{
-		head = REG_LOAD(e1000_reg(dev, E1000_REG_RDH));
-		tail = REG_LOAD(e1000_reg(dev, E1000_REG_RDT));
+		head = REG32_LOAD(e1000_reg(dev, E1000_REG_RDH));
+		tail = REG32_LOAD(e1000_reg(dev, E1000_REG_RDT));
 		cur = (1 + tail) % E1000_RXDESC_NR;
 
 		while (cur != head) {
@@ -205,8 +202,8 @@ static void e1000_rx(struct net_device *dev) {
 
 			if (0 != nf_test_raw(NF_CHAIN_INPUT,
 						NF_TARGET_ACCEPT,
-						(char *) nic_priv->rx_descs[cur].buffer_address,
-						ETH_ALEN + (char *) nic_priv->rx_descs[cur].buffer_address,
+						(char *) (uintptr_t) nic_priv->rx_descs[cur].buffer_address,
+						ETH_ALEN + (char *) (uintptr_t) nic_priv->rx_descs[cur].buffer_address,
 						ETH_ALEN)) {
 				goto drop_pack;
 			}
@@ -218,7 +215,7 @@ static void e1000_rx(struct net_device *dev) {
 
 			skb = nic_priv->rx_skbs[cur];
 			nic_priv->rx_skbs[cur] = new_skb;
-			nic_priv->rx_descs[cur].buffer_address = (uint32_t) new_skb->mac.raw;
+			nic_priv->rx_descs[cur].buffer_address = (uint32_t) (uintptr_t) new_skb->mac.raw;
 			assert(skb);
 
 			skb = skb_realloc(len, skb);
@@ -232,14 +229,14 @@ drop_pack:
 
 			cur = (1 + tail) % E1000_RXDESC_NR;
 		}
-		REG_STORE(e1000_reg(dev, E1000_REG_RDT), tail);
+		REG32_STORE(e1000_reg(dev, E1000_REG_RDT), tail);
 	}
 	irq_unlock();
 }
 
 static irq_return_t e1000_interrupt(unsigned int irq_num, void *dev_id) {
 	struct e1000_priv *nic_priv = e1000_get_priv(dev_id);
-	int cause = REG_LOAD(e1000_reg(dev_id, E1000_REG_ICR));
+	int cause = REG32_LOAD(e1000_reg(dev_id, E1000_REG_ICR));
 	irq_return_t ret = IRQ_NONE;
 
 	if (cause & (E1000_REG_ICR_RXO | E1000_REG_ICR_RXT)) {
@@ -259,10 +256,10 @@ static irq_return_t e1000_interrupt(unsigned int irq_num, void *dev_id) {
 		nic_priv->link_status ^= 1;
 
 		if (nic_priv->link_status) {
-			printk("e1000: Link up\n");
+			log_info("e1000: Link up");
 			netdev_flag_up(dev, IFF_RUNNING);
 		} else {
-			printk("e1000: Link down. Please check and insert network cable\n");
+			log_info("e1000: Link down. Please check and insert network cable");
 			netdev_flag_down(dev, IFF_RUNNING);
 		}
 		ret = IRQ_HANDLED;
@@ -302,24 +299,24 @@ static int e1000_open(struct net_device *dev) {
 	}
 
 	mdelay(MDELAY);
-	REG_ORIN(e1000_reg(dev, E1000_REG_CTRL), E1000_REG_CTRL_RST);
+	REG32_ORIN(e1000_reg(dev, E1000_REG_CTRL), E1000_REG_CTRL_RST);
 
 	mdelay(MDELAY);
-	REG_ORIN(e1000_reg(dev, E1000_REG_CTRL), E1000_REG_CTRL_SLU | E1000_REG_CTRL_ASDE);
-	REG_ANDIN(e1000_reg(dev, E1000_REG_CTRL), ~E1000_REG_CTRL_LRST);
-	REG_ANDIN(e1000_reg(dev, E1000_REG_CTRL), ~E1000_REG_CTRL_PHY_RST);
-	REG_ANDIN(e1000_reg(dev, E1000_REG_CTRL), ~E1000_REG_CTRL_ILOS);
-	REG_STORE(e1000_reg(dev, E1000_REG_FCAL), 0);
-	REG_STORE(e1000_reg(dev, E1000_REG_FCAH), 0);
-	REG_STORE(e1000_reg(dev, E1000_REG_FCT), 0);
-	REG_STORE(e1000_reg(dev, E1000_REG_FCTTV), 0);
-	REG_ANDIN(e1000_reg(dev, E1000_REG_CTRL), ~E1000_REG_CTRL_VME);
+	REG32_ORIN(e1000_reg(dev, E1000_REG_CTRL), E1000_REG_CTRL_SLU | E1000_REG_CTRL_ASDE);
+	REG32_ANDIN(e1000_reg(dev, E1000_REG_CTRL), ~E1000_REG_CTRL_LRST);
+	REG32_ANDIN(e1000_reg(dev, E1000_REG_CTRL), ~E1000_REG_CTRL_PHY_RST);
+	REG32_ANDIN(e1000_reg(dev, E1000_REG_CTRL), ~E1000_REG_CTRL_ILOS);
+	REG32_STORE(e1000_reg(dev, E1000_REG_FCAL), 0);
+	REG32_STORE(e1000_reg(dev, E1000_REG_FCAH), 0);
+	REG32_STORE(e1000_reg(dev, E1000_REG_FCT), 0);
+	REG32_STORE(e1000_reg(dev, E1000_REG_FCTTV), 0);
+	REG32_ANDIN(e1000_reg(dev, E1000_REG_CTRL), ~E1000_REG_CTRL_VME);
 
 	mdelay(MDELAY);
 	/* Clear Multicast Table Array (MTA). */
 	for (int i = 0; i < 128; i++) {
 		volatile uint32_t *r = i + e1000_reg(dev, E1000_REG_MTA);
-		REG_STORE(r, 0);
+		REG32_STORE(r, 0);
 	}
 
 	mdelay(MDELAY);
@@ -329,36 +326,36 @@ static int e1000_open(struct net_device *dev) {
 	for (int i = 0; i < 64; i++) {
 		volatile uint32_t *r = i + e1000_reg(dev, E1000_REG_CRCERRS);
 		printk("0x%x\n", (unsigned int) r);
-		REG_LOAD(r);
+		REG32_LOAD(r);
 	}
 #endif
 	mdelay(MDELAY);
-	REG_ORIN(e1000_reg(dev, E1000_REG_RCTL),  E1000_REG_RCTL_MPE);
+	REG32_ORIN(e1000_reg(dev, E1000_REG_RCTL),  E1000_REG_RCTL_MPE);
 
 	for (int i = 0; i < E1000_RXDESC_NR; i ++) {
 	        struct sk_buff *skb = nic_priv->rx_skbs[i];
-		nic_priv->rx_descs[i].buffer_address = (uint32_t) skb->mac.raw;
+		nic_priv->rx_descs[i].buffer_address = (uint32_t) (uintptr_t) skb->mac.raw;
 	}
 
 	mdelay(MDELAY);
-	REG_STORE(e1000_reg(dev, E1000_REG_RDBAL), (uint32_t) nic_priv->rx_descs);
-	REG_STORE(e1000_reg(dev, E1000_REG_RDBAH), 0);
-	REG_STORE(e1000_reg(dev, E1000_REG_RDLEN), sizeof(struct e1000_rx_desc) * E1000_RXDESC_NR);
-	REG_STORE(e1000_reg(dev, E1000_REG_RDH), 0);
-	REG_STORE(e1000_reg(dev, E1000_REG_RDT), E1000_RXDESC_NR - 1);
-	REG_ORIN( e1000_reg(dev, E1000_REG_RCTL), E1000_REG_RCTL_EN);
+	REG32_STORE(e1000_reg(dev, E1000_REG_RDBAL), (uint32_t) (uintptr_t) nic_priv->rx_descs);
+	REG32_STORE(e1000_reg(dev, E1000_REG_RDBAH), 0);
+	REG32_STORE(e1000_reg(dev, E1000_REG_RDLEN), sizeof(struct e1000_rx_desc) * E1000_RXDESC_NR);
+	REG32_STORE(e1000_reg(dev, E1000_REG_RDH), 0);
+	REG32_STORE(e1000_reg(dev, E1000_REG_RDT), E1000_RXDESC_NR - 1);
+	REG32_ORIN( e1000_reg(dev, E1000_REG_RCTL), E1000_REG_RCTL_EN);
 
 	mdelay(MDELAY);
-	REG_STORE(e1000_reg(dev, E1000_REG_TDBAL), (uint32_t) nic_priv->tx_descs);
-	REG_STORE(e1000_reg(dev, E1000_REG_TDBAH), 0);
-	REG_STORE(e1000_reg(dev, E1000_REG_TDLEN), sizeof(struct e1000_tx_desc) * E1000_TXDESC_NR);
-	REG_STORE(e1000_reg(dev, E1000_REG_TDH), 0);
-	REG_STORE(e1000_reg(dev, E1000_REG_TDT), 0);
-	REG_ORIN(e1000_reg(dev, E1000_REG_TCTL), E1000_REG_TCTL_EN | E1000_REG_TCTL_PSP);
+	REG32_STORE(e1000_reg(dev, E1000_REG_TDBAL), (uint32_t) (uintptr_t) nic_priv->tx_descs);
+	REG32_STORE(e1000_reg(dev, E1000_REG_TDBAH), 0);
+	REG32_STORE(e1000_reg(dev, E1000_REG_TDLEN), sizeof(struct e1000_tx_desc) * E1000_TXDESC_NR);
+	REG32_STORE(e1000_reg(dev, E1000_REG_TDH), 0);
+	REG32_STORE(e1000_reg(dev, E1000_REG_TDT), 0);
+	REG32_ORIN(e1000_reg(dev, E1000_REG_TCTL), E1000_REG_TCTL_EN | E1000_REG_TCTL_PSP);
 
 	mdelay(MDELAY);
 	/* Enable interrupts. */
-	REG_STORE(e1000_reg(dev, E1000_REG_IMS),
+	REG32_STORE(e1000_reg(dev, E1000_REG_IMS),
 				      E1000_REG_IMS_RXO  |
 				      E1000_REG_IMS_RXT  |
 				      E1000_REG_IMS_TXQE |
@@ -369,7 +366,7 @@ static int e1000_open(struct net_device *dev) {
 
 static int e1000_stop(struct net_device *dev) {
 
-	REG_ORIN(e1000_reg(dev, E1000_REG_CTRL), E1000_REG_CTRL_RST);
+	REG32_ORIN(e1000_reg(dev, E1000_REG_CTRL), E1000_REG_CTRL_RST);
 	mdelay(MDELAY);
 
 	e1000_free_dma_rx(dev);
@@ -378,13 +375,13 @@ static int e1000_stop(struct net_device *dev) {
 }
 
 static int set_mac_address(struct net_device *dev, const void *addr) {
-	REG_ANDIN(e1000_reg(dev, E1000_REG_RAH), ~E1000_REG_RAH_AV);
+	REG32_ANDIN(e1000_reg(dev, E1000_REG_RAH), ~E1000_REG_RAH_AV);
 
-	REG_STORE(e1000_reg(dev, E1000_REG_RAL), *(uint32_t *) addr);
-	REG_STORE(e1000_reg(dev, E1000_REG_RAH), *(uint16_t *) (addr + 4));
+	REG32_STORE(e1000_reg(dev, E1000_REG_RAL), *(uint32_t *) addr);
+	REG32_STORE(e1000_reg(dev, E1000_REG_RAH), *(uint16_t *) (addr + 4));
 
-	REG_ORIN(e1000_reg(dev, E1000_REG_RAH), E1000_REG_RAH_AV);
-	REG_ORIN(e1000_reg(dev, E1000_REG_RCTL),  E1000_REG_RCTL_MPE);
+	REG32_ORIN(e1000_reg(dev, E1000_REG_RAH), E1000_REG_RAH_AV);
+	REG32_ORIN(e1000_reg(dev, E1000_REG_RCTL),  E1000_REG_RCTL_MPE);
 
 	memcpy(dev->dev_addr, addr, ETH_ALEN);
 
@@ -418,7 +415,7 @@ static int e1000_init(struct pci_slot_dev *pci_dev) {
 	nic->drv_ops = &_drv_ops;
 	nic->irq = pci_dev->irq;
 	nic->base_addr = (uintptr_t) mmap_device_memory(
-			(void *) (pci_dev->bar[0] & PCI_BASE_ADDR_IO_MASK),
+			(void *) (uintptr_t) (pci_dev->bar[0] & PCI_BASE_ADDR_IO_MASK),
 			0x6000, /* XXX */
 			PROT_WRITE | PROT_READ,
 			MAP_FIXED,

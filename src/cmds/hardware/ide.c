@@ -12,7 +12,7 @@
 
 #include <drivers/ide.h>
 #include <drivers/block_dev.h>
-#include <fs/node.h>
+#include <fs/inode.h>
 
 static void print_usage(void) {
 	printf("Usage: ide \n");
@@ -20,7 +20,8 @@ static void print_usage(void) {
 
 static void print_drive (struct ide_tab *ide) {
 	hd_t *drive;
-	int dev_size, dev_bsize;
+	uint64_t dev_size;
+	size_t dev_bsize;
 
 	for(int i  = 0; i < 4; i++) {
 		printf("\nIDE Channel %d-%d: ", i/2, i%2);
@@ -34,9 +35,10 @@ static void print_drive (struct ide_tab *ide) {
 			printf(" None");
 		} else {
 			drive = (hd_t *) ide->drive[i];
-			dev_bsize = block_dev_ioctl(drive->bdev, IOCTL_GETBLKSIZE, NULL, 0);
-			dev_size = block_dev_ioctl(drive->bdev, IOCTL_GETDEVSIZE, NULL, 0);
-			printf(" %s;", ((struct node *)block_dev(drive->bdev)->dev_vfs_info)->name);
+			assert(drive);
+			dev_bsize = block_dev_block_size(drive->bdev);
+			dev_size = block_dev_size(drive->bdev);
+			printf(" %s;", block_dev(drive->bdev)->name);
 			printf(" %s", drive->param.serial);
 			printf(" %s", drive->param.model);
 			printf(" %5.3fM", ((float) dev_size) * dev_bsize / (1024 * 1024));
@@ -49,8 +51,7 @@ static void print_drive (struct ide_tab *ide) {
 int main(int argc, char **argv) {
 	int opt;
 
-	getopt_init();
-	while (-1 != (opt = getopt(argc - 1, argv, "ah"))) {
+	while (-1 != (opt = getopt(argc, argv, "ah"))) {
 		switch(opt) {
 		case 'a':
 			break;

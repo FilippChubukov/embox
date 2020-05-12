@@ -140,7 +140,7 @@ static int ntpdate_process(const struct ntphdr *rep, in_addr_t addr, int only_qu
 		if (ret != 0) {
 			return ret;
 		}
-		settimeofday(&ts, NULL);
+		setnsofday(&ts, NULL);
 	}
 
 	return 0;
@@ -179,7 +179,6 @@ int main(int argc, char **argv) {
 
 	only_query = 0;
 	timeout = MODOPS_TIMEOUT;
-	getopt_init();
 
 	while (-1 != (opt = getopt(argc, argv, "hqt:"))) {
 		switch (opt) {

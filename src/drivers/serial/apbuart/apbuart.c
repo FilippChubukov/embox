@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <errno.h>
 
+#include <drivers/common/memory.h>
+
 #include <drivers/amba_pnp.h>
 #include <drivers/char_dev.h>
 #include <hal/reg.h>
@@ -103,6 +105,23 @@ static int apbuart_setup(struct uart *dev, const struct uart_params *params) {
 	return 0;
 }
 
+static int apbuart_irq_en(struct uart *dev, const struct uart_params *params) {
+
+	if (params->irq) {
+		REG_STORE(&dev_regs->ctrl, UART_CTRL_TE | UART_CTRL_RE | UART_CTRL_RI);
+	}
+
+	return 0;
+}
+
+static int apbuart_irq_dis(struct uart *dev, const struct uart_params *params) {
+	if (params->irq) {
+		REG_STORE(&dev_regs->ctrl, UART_CTRL_TE | UART_CTRL_RE);
+	}
+
+	return 0;
+}
+
 static int apbuart_putc(struct uart *dev, int ch) {
 	while (!(UART_STAT_TE & REG_LOAD(&dev_regs->status))) {
 	}
@@ -133,6 +152,9 @@ static int dev_regs_init() {
 	return 0;
 }
 #elif OPTION_DEFINED(NUMBER,apbuart_base)
+
+PERIPH_MEMORY_DEFINE(apbuart, OPTION_GET(NUMBER,apbuart_base), sizeof(struct apbuart_regs));
+
 static int dev_regs_init() {
 	dev_regs = (volatile struct apbuart_regs *) OPTION_GET(NUMBER,apbuart_base);
 	return 0;
@@ -146,6 +168,8 @@ static const struct uart_ops uart_ops = {
 		.uart_putc = apbuart_putc,
 		.uart_hasrx = apbuart_has_symbol,
 		.uart_setup = apbuart_setup,
+		.uart_irq_en = apbuart_irq_en,
+		.uart_irq_dis = apbuart_irq_dis,
 };
 
 static struct uart uart0 = {
@@ -170,13 +194,7 @@ static const struct uart_params uart_diag_params = {
 		.irq = false,
 };
 
-const struct uart_diag DIAG_IMPL_NAME(__EMBUILD_MOD__) = {
-		.diag = {
-			.ops = &uart_diag_ops,
-		},
-		.uart = &uart0,
-		.params = &uart_diag_params,
-};
+DIAG_SERIAL_DEF(&uart0, &uart_diag_params);
 
 static int uart_init(void) {
 	return uart_register(&uart0, &uart_defparams);

@@ -208,6 +208,23 @@ extern int setregid(gid_t rgid, gid_t egid);
 extern int setgid(gid_t gid);
 extern int setegid(gid_t gid);
 
+/**
+ * @brief Change length of regular file
+ *
+ * @param path Path of the regular file
+ * @param length New length
+ *
+ * @return Negative error code or 0 if succeed
+ *
+ * @note Currently unsupported errors:
+ *    EACCESS
+ *    EFAULT
+ *    EINTR
+ *    EIO
+ *    ENAMETOOLONG
+ *    ENOTDIR
+ *    EROFS
+ **/
 extern int truncate(const char *path, off_t length);
 extern int ftruncate(int fd, off_t length);
 
@@ -228,7 +245,13 @@ static inline int access(const char *path, int amode) {
 }
 
 extern void swab(const void *bfrom, void *bto, ssize_t n);
-#include <getopt.h>
+
+extern int getopt(int argc, char *const argv[], const char *opts);
+
+extern char *optarg; /**< argument to optopt */
+extern int optind;   /**< last touched cmdline argument */
+extern int optopt;   /**< last returned option */
+extern int opterr;   /**< flag:error message on unrecognzed options */
 
 #ifndef environ
 /**
@@ -251,6 +274,9 @@ extern int chown(const char *path, uid_t owner, gid_t group);
  *******************************************/
 static inline void sync(void) {
 }
+
+
+extern unsigned alarm(unsigned seconds);
 
 __END_DECLS
 

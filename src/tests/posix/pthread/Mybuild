@@ -8,6 +8,19 @@ module pthread_mutex {
 	depends embox.framework.LibFramework
 }
 
+module pthread_kill_test {
+	source "pthread_kill_test.c"
+	depends embox.compat.posix.proc.signal
+	depends embox.compat.posix.pthreads
+}
+
+module pthread_rwlock {
+	source "pthread_rwlock_test.c"
+	depends embox.compat.posix.pthreads
+	depends embox.compat.posix.pthread_rwlock
+	depends embox.framework.LibFramework
+}
+
 module pthread_policy {
 	source "pthread_policy_test.c"
 	depends embox.compat.posix.pthreads
@@ -15,6 +28,12 @@ module pthread_policy {
 
 module pthread_cond {
 	source "pthread_cond_test.c"
+}
+
+module pthread_key {
+	source "pthread_key_test.c"
+	depends embox.compat.posix.pthreads
+	depends embox.compat.posix.pthread_key
 }
 
 module pthread_cond_timedwait_test {

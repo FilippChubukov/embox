@@ -3,16 +3,13 @@
 #FS_TEST_RO="iso9660 jffs2"
 #FS_TEST_RW="vfat ext2 ext3 ext4"
 FS_TEST_RO="jffs2 ext4"
-FS_TEST_RW="ext2 ext3 ntfs"
-#FS_TEST_NETWORK="nfs cifs"
-FS_TEST_NETWORK=""
+FS_TEST_RW="ext2 ext3 ntfs vfat"
+FS_TEST_NETWORK="nfs cifs"
 
 FS_TEST_NFS_ROOT="/var/nfs_test"
-FS_TEST_NFS_PREPARE="sudo /etc/init.d/nfs-kernel-server restart"
 
 FS_TEST_CIFS_SHARE="/Public"
 FS_TEST_CIFS_PATH="/var/cifs_test"
-FS_TEST_CIFS_PREPARE="sudo /etc/init.d/nmbd restart && sudo /etc/init.d/smbd restart"
 
 ROOT_DIR=.
 BASE_DIR=$ROOT_DIR
@@ -54,7 +51,7 @@ run_qemu_fs() {
 	img_mount=
 	QEMU_MOUNT_HD="\"mount -t $FS /dev/hda /mnt/fs_test\","
 	case $FS in
-		vfat | ext2 | ext3 | ext4 | qnx6 | ntfs)
+		vfat | ext2 | ext3 | ext4 | ntfs)
 			img_mount="$QEMU_MOUNT_HD"
 			;;
 		jffs2)
@@ -82,7 +79,7 @@ run_qemu_fs() {
 
 	img_run=
 	case $FS in
-		vfat | ext2 | ext3 | ext4 | qnx6 | jffs2 | ntfs)
+		vfat | ext2 | ext3 | ext4 | jffs2 | ntfs)
 			img_run="-hda $IMG"
 			;;
 		iso9660)
@@ -162,9 +159,11 @@ for f in $FS_TEST_NETWORK; do
 
 	case $f in
 		nfs)
-			$CONT_FS_MANAGE $f $FS_TEST_NFS_ROOT build_dir "$IMG_RW_CONTENT"
+			sudo mount -t tmpfs none $FS_TEST_NFS_ROOT
+			sudo service rpcbind restart
+			sudo /etc/init.d/nfs-kernel-server restart
 
-			eval $FS_TEST_NFS_PREPARE
+			$CONT_FS_MANAGE $f $FS_TEST_NFS_ROOT build_dir "$IMG_RW_CONTENT"
 
 			run_qemu_fs $f $FS_TEST_NFS_ROOT "rw"
 
@@ -172,9 +171,10 @@ for f in $FS_TEST_NETWORK; do
 			check_post_exit "fs content differ from expected"
 			;;
 		cifs)
-			$CONT_FS_MANAGE $f $FS_TEST_CIFS_PATH build_dir "$IMG_RW_CONTENT"
+			sudo /etc/init.d/nmbd restart
+			sudo /etc/init.d/smbd restart
 
-			eval $FS_TEST_CIFS_PREPARE
+			$CONT_FS_MANAGE $f $FS_TEST_CIFS_PATH build_dir "$IMG_RW_CONTENT"
 
 			run_qemu_fs $f $FS_TEST_CIFS_SHARE "rw"
 

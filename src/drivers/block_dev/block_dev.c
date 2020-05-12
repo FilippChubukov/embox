@@ -1,111 +1,440 @@
 /**
  * @file
- * @brief
+ * @brief VFS-independent functions related to block devices
  *
- * @date 31.07.2012
- * @author Andrey Gazukin
+ * @date   14 Apr 2015
+ * @author Denis Deryugin
  */
 
-#include <errno.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <limits.h>
 #include <assert.h>
-
-#include <mem/phymem.h>
-
-#include <embox/unit.h>
-
-#include <fs/vfs.h>
-#include <fs/node.h>
-#include <fs/file_desc.h>
-#include <fs/bcache.h>
-#include <fs/file_operation.h>
+#include <errno.h>
+#include <string.h>
+#include <libgen.h>
 
 #include <drivers/block_dev.h>
+#include <framework/mod/options.h>
+#include <fs/bcache.h>
+#include <mem/misc/pool.h>
+#include <mem/phymem.h>
+#include <mem/page.h>
+#include <util/array.h>
+#include <util/indexator.h>
+#include <util/math.h>
 
-EMBOX_UNIT_INIT(blockdev_init);
+extern struct idesc_ops idesc_bdev_ops;
 
-static struct idesc *bdev_open(struct node *node, struct file_desc *file_desc, int flags) {
-	return &file_desc->idesc;
+#define DEFAULT_BDEV_BLOCK_SIZE OPTION_GET(NUMBER, default_block_size)
+
+ARRAY_SPREAD_DEF(const struct block_dev_module, __block_dev_registry);
+POOL_DEF(cache_pool, struct block_dev_cache, MAX_BDEV_QUANTITY);
+POOL_DEF(blockdev_pool, struct block_dev, MAX_BDEV_QUANTITY);
+INDEX_DEF(block_dev_idx, 0, MAX_BDEV_QUANTITY);
+
+static struct block_dev *devtab[MAX_BDEV_QUANTITY];
+
+struct block_dev **get_bdev_tab(void) {
+	return &devtab[0];
 }
 
-static int bdev_close(struct file_desc *desc) {
-	return 0;
-}
-
-static size_t bdev_read(struct file_desc *desc, void *buf, size_t size) {
-	int n_read = block_dev_read_buffered((struct block_dev *) desc->node->nas->fi->privdata,
-			buf, size, desc->cursor);
-	if (n_read > 0) {
-		desc->cursor += n_read;
-	}
-	return n_read;
-}
-
-static size_t bdev_write(struct file_desc *desc, void *buf, size_t size) {
-	int n_write = block_dev_write_buffered((struct block_dev *) desc->node->nas->fi->privdata,
-			buf, size, desc->cursor);
-	if (n_write > 0) {
-		desc->cursor += n_write;
-	}
-
-	return n_write;
-}
-
-static struct kfile_operations blockdev_fop = {
-	.open = bdev_open,
-	.close = bdev_close,
-	.read = bdev_read,
-	.write = bdev_write,
-};
-
-static struct filesystem *blockdev_fs;
-
-static int blockdev_init(void) {
-	blockdev_fs = filesystem_create("empty");
-	blockdev_fs->file_op = &blockdev_fop;
-
-	return 0;
-}
-
-struct block_dev *block_dev_create(const char *path, void *driver, void *privdata) {
+static int block_dev_cache_free(void *dev) {
 	struct block_dev *bdev;
-	struct path node, root;
-	struct nas *nas;
-	struct node_fi *node_fi;
+	struct block_dev_cache *cache;
 
-	bdev = block_dev_create_common(path, driver, privdata);
+	if (NULL == dev) {
+		return -1;
+	}
+	bdev = block_dev(dev);
+
+	cache = bdev->cache;
+	if (NULL == cache) {
+		return 0;
+	}
+
+	phymem_free(cache->pool, cache->depth * cache->blkfactor);
+	pool_free(&cache_pool, cache);
+
+	return  0;
+}
+
+void block_dev_free(struct block_dev *dev) {
+	assert(dev);
+
+	devtab[dev->id] = NULL;
+	index_free(&block_dev_idx, dev->id);
+	pool_free(&blockdev_pool, dev);
+}
+
+int block_devs_init(void) {
+	int ret;
+	const struct block_dev_module *bdev_module;
+
+	array_spread_foreach_ptr(bdev_module, __block_dev_registry) {
+		if (bdev_module->dev_drv->probe != NULL) {
+			ret = bdev_module->dev_drv->probe(NULL);
+			if (ret != 0) {
+				return ret;
+			}
+		}
+	}
+
+	return 0;
+}
+
+struct block_dev_module *block_dev_lookup(const char *bd_name) {
+	struct block_dev_module *bdev_module;
+
+	array_spread_foreach_ptr(bdev_module, __block_dev_registry) {
+		if (0 == strcmp(bdev_module->name, bd_name)) {
+			return bdev_module;
+		}
+	}
+
+	return NULL;
+}
+
+struct block_dev *block_dev_find(const char *bd_name) {
+	int i;
+
+	for (i = 0; i < MAX_BDEV_QUANTITY; i++) {
+		if (devtab[i] && 0 == strcmp(devtab[i]->name, bd_name)) {
+			return devtab[i];
+		}
+	}
+
+	return NULL;
+}
+
+int block_dev_max_id(void) {
+	return MAX_BDEV_QUANTITY;
+}
+
+struct block_dev *block_dev_by_id(int id) {
+	if (id < 0 || id >= MAX_BDEV_QUANTITY) {
+		return NULL;
+	}
+
+	return devtab[id];
+}
+
+struct block_dev *block_dev(void *dev) {
+	return (struct block_dev *)dev;
+}
+
+int block_dev_read_buffered(struct block_dev *bdev, char *buffer, size_t count, size_t offset) {
+	size_t blksize;
+	int blkno, cplen, cursor, res, i;
+	struct buffer_head *bh;
+
+	assert(bdev);
+	assert(bdev->driver);
+
+	if (NULL == bdev->driver->read) {
+		return -ENOSYS;
+	}
+	if (offset + count > bdev->size) {
+		return -EIO;
+	}
+	blksize = block_dev_block_size(bdev);
+	if (blksize < 0) {
+		return blksize;
+	}
+	blkno = offset / blksize;
+	cplen = min(count, blksize - offset % blksize);
+
+	for (cursor = 0, i = 0; count != 0;
+			i++, count -= cplen, cursor += cplen, cplen = min(count, blksize)) {
+		bh = bcache_getblk_locked(bdev, blkno + i, blksize);
+		{
+			if (buffer_new(bh)) {
+				if (blksize != (res = bdev->driver->read(bdev, bh->data, blksize, blkno + i))
+						|| 0 != (res = buffer_decrypt(bh))) {
+					bcache_buffer_unlock(bh);
+					return res;
+				}
+				buffer_clear_flag(bh, BH_NEW);
+			}
+			memcpy(buffer + cursor, bh->data + (i == 0 ? offset % blksize : 0), cplen);
+		}
+		bcache_buffer_unlock(bh);
+	}
+
+	return cursor;
+}
+
+int block_dev_write_buffered(struct block_dev *bdev, const char *buffer, size_t count, size_t offset) {
+	size_t blksize;
+	int blkno, cplen, cursor, res, i;
+	struct buffer_head *bh;
+
+	assert(bdev);
+
+	if (NULL == bdev->driver->write) {
+		return -ENOSYS;
+	}
+	if (offset + count > bdev->size) {
+		return -EIO;
+	}
+
+	blksize = bdev->block_size;
+	if (blksize < 0) {
+		return blksize;
+	}
+
+	blkno = offset / blksize;
+	cplen = min(count, blksize - offset % blksize);
+
+	for (cursor = 0, i = 0; count != 0;
+			i++, count -= cplen, cursor += cplen, cplen = min(count, blksize)) {
+		bh = bcache_getblk_locked(bdev, blkno + i, blksize);
+		{
+			if (buffer_new(bh)) {
+				if (cplen < blksize) {
+					if (blksize != (res = bdev->driver->read(bdev, bh->data, blksize, blkno + i))
+							|| 0 != (res = buffer_decrypt(bh))) {
+						bcache_buffer_unlock(bh);
+						return res;
+					}
+				}
+				buffer_clear_flag(bh, BH_NEW);
+			}
+			memcpy(bh->data + (i == 0 ? offset % blksize : 0), buffer + cursor, cplen);
+			/**
+			 * Blocks are stored in the buffer cache in a decrypted state.
+			 * Therefore first we encrypt block, then write it onto disk and then decrypt block.
+			 */
+			buffer_encrypt(bh);
+			if (blksize != (res = bdev->driver->write(bdev, bh->data,
+					blksize, blkno + i))) {
+				buffer_decrypt(bh);
+				bcache_buffer_unlock(bh);
+				return res;
+			}
+			buffer_decrypt(bh);
+		}
+		bcache_buffer_unlock(bh);
+	}
+
+	return cursor;
+}
+
+int block_dev_read(void *dev, char *buffer, size_t count, blkno_t blkno) {
+	struct block_dev *bdev;
+	size_t blksize;
+
+	if (NULL == dev) {
+		return -ENODEV;
+	}
+	bdev = block_dev(dev);
+
+	if (blkno >= bdev->size / bdev->block_size) {
+		return -EINVAL;
+	}
+
+	if (bdev->parent_bdev != NULL) {
+		blkno += bdev->start_offset;
+		bdev = bdev->parent_bdev;
+	}
+
+	blksize = block_dev_block_size(bdev);
+	if (blksize < 0) {
+		return blksize;
+	}
+	return block_dev_read_buffered(bdev, buffer, count, blkno * blksize);
+}
+
+int block_dev_write(void *dev, const char *buffer, size_t count, blkno_t blkno) {
+	struct block_dev *bdev;
+	size_t blksize;
+
+	if (NULL == dev) {
+		return -ENODEV;
+	}
+
+	bdev = block_dev(dev);
+
+	if (blkno >= bdev->size / bdev->block_size) {
+		return -EINVAL;
+	}
+
+	if (bdev->parent_bdev != NULL) {
+		blkno += bdev->start_offset;
+		bdev = bdev->parent_bdev;
+	}
+
+	blksize = block_dev_block_size(bdev);
+	if (blksize < 0) {
+		return blksize;
+	}
+	return block_dev_write_buffered(bdev, buffer, count, blkno * blksize);
+}
+
+int block_dev_ioctl(void *dev, int cmd, void *args, size_t size) {
+	struct block_dev *bdev;
+
+	if (NULL == dev) {
+		return -ENODEV;
+	}
+
+	bdev = dev;
+
+	switch (cmd) {
+	case IOCTL_GETDEVSIZE:
+		return bdev->size;
+	case IOCTL_GETBLKSIZE:
+		return bdev->block_size;
+	default:
+		assert(bdev->driver);
+		if (NULL == bdev->driver->ioctl)
+			return -ENOSYS;
+
+		return bdev->driver->ioctl(bdev, cmd, args, 0);
+	}
+}
+
+struct block_dev_cache *block_dev_cache_init(void *dev, int blocks) {
+	int pagecnt;
+	struct block_dev_cache *cache;
+	struct block_dev *bdev;
+
+	if (NULL == dev) {
+		return NULL;
+	}
+	/* if reinit */
+	block_dev_cache_free(dev);
+
+	bdev = block_dev(dev);
+	if (NULL == (cache = bdev->cache = pool_alloc(&cache_pool))) {
+		return NULL;
+	}
+
+	cache->lastblkno = -1;
+	cache->buff_cntr = -1;
+
+	if (0 >= (cache->blksize = block_dev_block_size(bdev))) {
+		return NULL;
+	}
+
+	/* cache size is a multiple of the memory page */
+	pagecnt = 1;
+	if(cache->blksize > PAGE_SIZE()) {
+		pagecnt = cache->blksize / PAGE_SIZE();
+		if(cache->blksize % PAGE_SIZE()) {
+			pagecnt++;
+		}
+	}
+	cache->blkfactor = pagecnt;
+
+	if (NULL == (cache->pool = phymem_alloc(blocks * pagecnt))) {
+		return NULL;
+	}
+	cache->depth = blocks;
+
+	return  cache;
+}
+
+struct block_dev_cache *block_dev_cached_read(void *dev, blkno_t blkno) {
+	struct block_dev_cache *cache;
+	struct block_dev *bdev;
+
+	if (NULL == dev) {
+		return NULL;
+	}
+	bdev = block_dev(dev);
+
+	if(NULL == (cache = bdev->cache)) {
+		return NULL;
+	}
+
+	/* set pointer to the buffer in pool */
+	if(cache->lastblkno != blkno) {
+		cache->buff_cntr++;
+		cache->buff_cntr %= cache->depth;
+
+		cache->data = cache->pool + cache->buff_cntr * PAGE_SIZE() * cache->blkfactor;
+		cache->blkno = blkno;
+
+		block_dev_read(bdev, cache->data, cache->blksize, cache->blkno);
+		cache->lastblkno = blkno;
+	}
+
+	return cache;
+}
+
+uint64_t block_dev_size(struct block_dev *dev) {
+	assert(dev);
+
+	return dev->size;
+}
+
+size_t block_dev_block_size(struct block_dev *dev) {
+	assert(dev);
+
+	return dev->block_size;
+}
+
+struct block_dev *block_dev_parent(struct block_dev *dev) {
+	assert(dev);
+
+	return dev->parent_bdev;
+}
+
+const char *block_dev_name(struct block_dev *dev) {
+	assert(dev);
+
+	return dev->name;
+}
+
+dev_t block_dev_id(struct block_dev *dev) {
+	assert(dev);
+
+	return dev->id;
+}
+
+struct block_dev *block_dev_create(const char *path, const struct block_dev_driver *driver, void *privdata) {
+	struct block_dev *bdev;
+	struct dev_module *devmod;
+	size_t bdev_id;
+
+	bdev = (struct block_dev *) pool_alloc(&blockdev_pool);
 	if (NULL == bdev) {
 		return NULL;
 	}
 
-	vfs_get_root_path(&root);
+	memset(bdev, 0, sizeof(struct block_dev));
 
-	if (0 != vfs_create(&root, path, S_IFBLK | S_IRALL | S_IWALL, &node)) {
+	bdev_id = index_alloc(&block_dev_idx, INDEX_MIN);
+	if (bdev_id == INDEX_NONE) {
 		block_dev_free(bdev);
 		return NULL;
 	}
+	devtab[bdev_id] = bdev;
 
-	bdev->dev_vfs_info = node.node;
-	nas = node.node->nas;
-	nas->fs = blockdev_fs;
-	node_fi = nas->fi;
-	node_fi->privdata = bdev;
-	node_fi->ni.size = 0;/*TODO*/
-	node_fi->ni.mtime = 0;/*TODO*/
+	*bdev = (struct block_dev) {
+		.id = (dev_t)bdev_id,
+		.driver = driver,
+		.privdata = privdata,
+		.block_size = DEFAULT_BDEV_BLOCK_SIZE,
+	};
+
+	strncpy(bdev->name, basename((char *)path), sizeof(bdev->name) - 1);
+	bdev->name[sizeof(bdev->name) - 1]  = '\0';
+
+	devmod = dev_module_create(bdev->name, NULL, NULL, &idesc_bdev_ops, bdev);
+	bdev->dev_module = devmod;
 
 	return bdev;
 }
 
 int block_dev_destroy(void *dev) {
-	struct block_dev *bdev;
+	struct dev_module *devmod = dev;
 
-	bdev = block_dev(dev);
-	vfs_del_leaf(bdev->dev_vfs_info);
-	block_dev_free(bdev);
+	for (int i = 0; i < MAX_BDEV_QUANTITY; i++) {
+		if (devtab[i] && devtab[i]->parent_bdev == devmod->dev_priv) {
+			block_dev_destroy(devtab[i]->dev_module);
+		}
+	}
 
-	return 0;
+	block_dev_free(devmod->dev_priv);
+
+	return dev_module_destroy(dev);
 }
-

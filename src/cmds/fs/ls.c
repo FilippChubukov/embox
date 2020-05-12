@@ -9,10 +9,11 @@
  */
 
 #include <errno.h>
-#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <stdio.h>
+#include <unistd.h>
 
 #include <dirent.h>
 #include <pwd.h>
@@ -20,7 +21,7 @@
 #include <sys/stat.h>
 #include <limits.h>
 
-typedef void item_print(const char *path, stat_t *sb);
+typedef void item_print(const char *path, struct stat *sb);
 
 static void print_usage(void) {
 	printf("Usage: ls [-hlR] path\n");
@@ -34,11 +35,11 @@ static void print_access(int flags) {
 
 #define BUFLEN 1024
 
-static void printer_simple(const char *path, stat_t *sb) {
+static void printer_simple(const char *path, struct stat *sb) {
 	printf(" %s\n", path);
 }
 
-static void printer_long(const char *path, stat_t *sb) {
+static void printer_long(const char *path, struct stat *sb) {
 	struct passwd pwd, *res;
 	struct group grp, *gres;
 	char buf[BUFLEN];
@@ -93,12 +94,17 @@ static void printer_long(const char *path, stat_t *sb) {
 
 static void print(char *path, DIR *dir, int recursive, item_print *printer) {
 	struct dirent *dent;
+	char *line;
 
 	while (NULL != (dent = readdir(dir))) {
 		int pathlen = strlen(path);
 		int dent_namel = strlen(dent->d_name);
-		char line[pathlen + dent_namel + 3];
-		stat_t sb;
+		line = (char*)malloc(sizeof(char) * (pathlen + dent_namel + 3));
+		if (line == NULL) {
+			printf("Failed to allocate memory for buffer!\n");
+			return;
+		}
+		struct stat sb;
 
 		if (pathlen > 0) {
 			sprintf(line, "%s/%s", path, dent->d_name);
@@ -108,12 +114,13 @@ static void print(char *path, DIR *dir, int recursive, item_print *printer) {
 
 		if (-1 == stat(line, &sb)) {
 			printf("Cannot stat %s\n", line);
+			free(line);
 			continue;
 		}
 
 		printer(line, &sb);
 
-		if (sb.st_mode & S_IFDIR && recursive) {
+		if (S_ISDIR(sb.st_mode) && recursive) {
 			DIR *d;
 
 			if (NULL == (d = opendir(line))) {
@@ -124,6 +131,7 @@ static void print(char *path, DIR *dir, int recursive, item_print *printer) {
 
 			closedir(d);
 		}
+		free(line);
 	}
 }
 
@@ -158,29 +166,39 @@ int main(int argc, char **argv) {
 	}
 
 	if (optind < argc) {
-		stat_t sb;
+		struct stat sb;
 
-		if (-1 == stat(argv[optind], &sb)) {
+		do {
+			if (-1 == stat(argv[optind], &sb)) {
+				return -errno;
+			}
+
+			if (!S_ISDIR(sb.st_mode)) {
+				printer(argv[optind], &sb);
+				continue;
+			}
+
+			snprintf(dir_name, NAME_MAX, "%s", argv[optind]);
+
+			if (NULL == (dir = opendir(dir_name))) {
+				return -errno;
+			}
+
+			print(dir_name, dir, recursive, printer);
+	
+			closedir(dir);
+		} while (optind++ < argc - 1);
+	} else {
+		strcpy(dir_name, ".");
+
+		if (NULL == (dir = opendir(dir_name))) {
 			return -errno;
 		}
 
-		if (~sb.st_mode & S_IFDIR) {
-			printer(argv[optind], &sb);
-			return 0;
-		}
+		print(dir_name, dir, recursive, printer);
 
-		sprintf(dir_name, "%s", argv[optind]);
-	} else {
-		sprintf(dir_name, "%s", "");
+		closedir(dir);
 	}
-
-	if (NULL == (dir = opendir(dir_name))) {
-		return -errno;
-	}
-
-	print(dir_name, dir, recursive, printer);
-
-	closedir(dir);
 
 	return 0;
 }

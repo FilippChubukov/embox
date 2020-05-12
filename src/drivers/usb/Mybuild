@@ -1,47 +1,32 @@
-
 package embox.driver.usb
 
 module core {
-	source "usb_core.c"
-	depends whitelist_api
+	option number log_level = 1
+	option number usb_req_hnd_priority = 200
 
-	source "usb_port.c"
-	source "usb_queue.c"
-	source "usb_obj.c"
-	source "usb_pnp.c"
+	/* Global options */
+	option number usb_max_hcd = 2
+	option number usb_max_hcd_devs = 127
+	option number usb_max_dev = 32
+	option number usb_max_hub = 8
+	option number usb_max_req = 64
+	/* Per device options */
+	option number usb_dev_max_interfaces = 4
+	option number usb_dev_max_endp = 16
 
-	source "usb_class.c"
+	source "usb_core.c",
+		"usb_queue.c",
+		"usb_config.c"
 
 	source "usb_driver.c"
 	depends embox.driver.char_dev
-
-	source "usb_dev_desc.c"
 }
 
-@DefaultImpl(whitelist_dev)
-abstract module whitelist_api { }
+module hub {
+	option number log_level = 1
 
-module whitelist_dev extends whitelist_api {
-	option string whitelist = ""
-	/*option string whitelist = "0x46f4:0x0001:3,0x8086:0x1234"*/
+	source "usb_hub.c"
 
-	@IncludeExport(path="drivers/usb")
-	source "usb_whitelist_dev.h"
-	source "usb_whitelist_dev.c"
-
-	depends embox.driver.char_dev
-	depends core
-}
-
-module whitelist_dev_dvfs extends whitelist_api {
-	option string whitelist = ""
-	/*option string whitelist = "0x46f4:0x0001:3,0x8086:0x1234"*/
-
-	@IncludeExport(path="drivers/usb")
-	source "usb_whitelist_dev.h"
-	source "usb_whitelist_dev_dvfs.c"
-
-	depends embox.driver.char_dev
 	depends core
 }
 
@@ -50,4 +35,3 @@ module driver_example {
 
 	depends core
 }
-
